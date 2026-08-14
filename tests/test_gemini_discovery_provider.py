@@ -89,9 +89,11 @@ def test_discovery_from_multiple_files_sends_all_files_together(tmp_path: Path) 
     result = provider.discover_elements_from_files([pdf, image])
 
     assert result.elements == []
-    assert len(provider._provider._client.files.uploads) == 2
+    assert provider._provider._client.files.uploads == []
     call = provider._provider._client.models.calls[0]
     assert len(call["contents"]) == 3
+    assert call["contents"][1].inline_data.mime_type == "application/pdf"
+    assert call["contents"][2].inline_data.mime_type == "image/png"
     assert "AVAILABLE SOURCES" in call["contents"][0].text
     assert "source-1 | planos.pdf | application/pdf" in call["contents"][0].text
     assert "source-2 | foto.png | image/png" in call["contents"][0].text

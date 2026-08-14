@@ -235,7 +235,7 @@ def test_enrichment_merges_multiple_batches_and_accumulates_usage(tmp_path: Path
     assert len(debug_capture.batch_results) == 2
 
 
-def test_full_pipeline_mapper_receives_all_items_and_reuses_uploads(
+def test_full_pipeline_mapper_receives_all_items_and_reuses_inline_parts(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -289,10 +289,15 @@ def test_full_pipeline_mapper_receives_all_items_and_reuses_uploads(
 
     assert result is mapped_result
     assert len(mapper_calls[0].elements) == 2
-    assert len(provider._provider._client.files.uploads) == 2
+    assert provider._provider._client.files.uploads == []
     assert len(provider._provider._client.models.calls) == 4
     assert all(
         len(call["contents"]) == 3
+        for call in provider._provider._client.models.calls
+    )
+    assert all(
+        call["contents"][1].inline_data.mime_type == "application/pdf"
+        and call["contents"][2].inline_data.mime_type == "application/pdf"
         for call in provider._provider._client.models.calls
     )
     assert result.extraction_metadata.token_usage == TokenUsage(
@@ -356,10 +361,11 @@ def test_full_pipeline_scope_selects_only_allowed_items(tmp_path: Path, monkeypa
         "partial",
         "uncertain",
     ]
-    uploaded_path = provider._provider._client.files.uploads[0][0]
     assert original_file.exists() is True
-    assert uploaded_path.name == "source-1.pdf"
-    assert uploaded_path.exists() is False
+    assert provider._provider._client.files.uploads == []
+    part = provider._provider._client.models.calls[0]["contents"][1]
+    assert part.inline_data.mime_type == "application/pdf"
+    assert part.inline_data.data == b"%PDF-1.7\ncontent"
 
 
 def test_scope_missing_defaults_to_uncertain_and_duplicate_is_warned(tmp_path: Path) -> None:

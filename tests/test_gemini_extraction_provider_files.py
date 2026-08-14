@@ -111,7 +111,7 @@ def _minimal_pdf_bytes(page_count: int) -> bytes:
     ).encode()
 
 
-def test_extract_from_files_uploads_all_files_in_one_model_call(tmp_path: Path) -> None:
+def test_extract_from_files_sends_all_files_inline_in_one_model_call(tmp_path: Path) -> None:
     pdf = tmp_path / "planos.pdf"
     png = tmp_path / "foto.png"
     pdf.write_bytes(b"%PDF-1.7\ncontent")
@@ -125,13 +125,17 @@ def test_extract_from_files_uploads_all_files_in_one_model_call(tmp_path: Path) 
     )
 
     fake_client = provider._provider._client
-    assert len(fake_client.files.uploads) == 2
+    assert fake_client.files.uploads == []
     assert len(fake_client.models.calls) == 1
     call = fake_client.models.calls[0]
     assert call["model"] == "gemini-test"
     assert call["config"].response_schema is None
     assert len(call["contents"]) == 3
     assert "AVAILABLE SOURCES" in call["contents"][0].text
+    assert call["contents"][1].inline_data.mime_type == "application/pdf"
+    assert call["contents"][1].inline_data.data == b"%PDF-1.7\ncontent"
+    assert call["contents"][2].inline_data.mime_type == "image/png"
+    assert call["contents"][2].inline_data.data == b"\x89PNG\r\n\x1a\ncontent"
     assert "source-1 | planos.pdf | application/pdf" in call["contents"][0].text
     assert "source-2 | foto.png | image/png" in call["contents"][0].text
     assert result.requirement.project_id == "project-1"
@@ -139,6 +143,19 @@ def test_extract_from_files_uploads_all_files_in_one_model_call(tmp_path: Path) 
     assert [source.id for source in result.sources] == ["source-1", "source-2"]
     assert [source.media_type for source in result.sources] == ["application/pdf", "image/png"]
     assert result.extraction_metadata.source_count == 2
+
+
+def test_extract_from_files_sends_jpg_inline(tmp_path: Path) -> None:
+    jpg = tmp_path / "foto.jpg"
+    jpg.write_bytes(b"\xff\xd8\xffcontent")
+    provider = _provider_with_fake_client()
+
+    provider.extract_from_files([jpg])
+
+    call = provider._provider._client.models.calls[0]
+    assert provider._provider._client.files.uploads == []
+    assert call["contents"][1].inline_data.mime_type == "image/jpeg"
+    assert call["contents"][1].inline_data.data == b"\xff\xd8\xffcontent"
 
 
 def test_extract_from_files_populates_pdf_page_count_when_available(tmp_path: Path) -> None:
@@ -183,6 +200,14 @@ def test_extract_from_files_preserves_three_sources_order_and_evidence_source(
         "spreadsheet",
         "image",
     ]
+    contents = provider._provider._client.models.calls[0]["contents"]
+    assert contents[1].inline_data.mime_type == "application/pdf"
+    assert (
+        contents[2].inline_data.mime_type
+        == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert contents[3].inline_data.mime_type == "image/png"
+    assert provider._provider._client.files.uploads == []
     assert "source-1 | planos.pdf | application/pdf" in prompt
     assert (
         "source-2 | cuadro.xlsx | "
@@ -319,18 +344,17 @@ def test_extract_from_files_rejects_empty_response_text(tmp_path: Path) -> None:
         provider.extract_from_files([pdf])
 
 
-def test_extract_from_files_uses_ascii_temp_copy_for_unicode_names(tmp_path: Path) -> None:
+def test_extract_from_files_uses_inline_bytes_for_unicode_names(tmp_path: Path) -> None:
     image = tmp_path / "fachada_nin\u0303o.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\ncontent")
     provider = _provider_with_fake_client()
 
     provider.extract_from_files([image])
 
-    upload_path, upload_config = provider._provider._client.files.uploads[0]
-    upload_path.name.encode("ascii")
-    assert upload_path.name == "source-1.png"
-    assert upload_config.display_name == image.name
-    assert upload_config.mime_type == "image/png"
+    assert provider._provider._client.files.uploads == []
+    part = provider._provider._client.models.calls[0]["contents"][1]
+    assert part.inline_data.mime_type == "image/png"
+    assert part.inline_data.data == b"\x89PNG\r\n\x1a\ncontent"
 
 
 def test_extract_from_files_rejects_missing_files(tmp_path: Path) -> None:

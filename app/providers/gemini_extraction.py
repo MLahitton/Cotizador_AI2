@@ -1,6 +1,4 @@
 import re
-import shutil
-import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,20 +85,15 @@ class GeminiExtractionProvider:
             media_types=_media_types(file_specs),
         )
 
-        with tempfile.TemporaryDirectory(prefix="ai2-gemini-upload-") as temp_dir:
-            uploaded_files = [
-                self._upload_file(spec, Path(temp_dir), index)
-                for index, spec in enumerate(file_specs, start=1)
-            ]
-            contents = _build_multifile_contents(prompt, uploaded_files)
-            response = self._provider._client.models.generate_content(
-                model=self._provider.model,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0,
-                ),
-            )
+        contents = _build_multifile_contents(prompt, file_specs)
+        response = self._provider._client.models.generate_content(
+            model=self._provider.model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0,
+            ),
+        )
 
         discovery_result = _parse_gemini_discovery_response(response, debug_capture)
         if debug_capture is not None:
@@ -118,7 +111,7 @@ class GeminiExtractionProvider:
         if not files:
             raise ValueError("Debes proporcionar al menos un archivo para enrichment.")
 
-        with _UploadedRequirementContext(self, files) as context:
+        with _RequirementFileContext(self, files) as context:
             return self._enrich_discovery_with_context(
                 context,
                 discovery,
@@ -135,7 +128,7 @@ class GeminiExtractionProvider:
         if not files:
             raise ValueError("Debes proporcionar al menos un archivo para scope.")
 
-        with _UploadedRequirementContext(self, files) as context:
+        with _RequirementFileContext(self, files) as context:
             response = self._generate_json(
                 _build_multifile_contents(
                     build_file_scope_prompt(
@@ -143,7 +136,7 @@ class GeminiExtractionProvider:
                         context.paths,
                         media_types=_media_types(context.file_specs),
                     ),
-                    context.uploaded_files,
+                    context.file_specs,
                 )
             )
 
@@ -166,7 +159,7 @@ class GeminiExtractionProvider:
         if not files:
             raise ValueError("Debes proporcionar al menos un archivo para extraer.")
 
-        with _UploadedRequirementContext(self, files) as context:
+        with _RequirementFileContext(self, files) as context:
             discovery_debug = GeminiDiscoveryDebugCapture()
             discovery_response = self._generate_json(
                 _build_multifile_contents(
@@ -174,7 +167,7 @@ class GeminiExtractionProvider:
                         context.paths,
                         media_types=_media_types(context.file_specs),
                     ),
-                    context.uploaded_files,
+                    context.file_specs,
                 )
             )
             discovery = _parse_gemini_discovery_response(discovery_response, discovery_debug)
@@ -189,7 +182,7 @@ class GeminiExtractionProvider:
                         context.paths,
                         media_types=_media_types(context.file_specs),
                     ),
-                    context.uploaded_files,
+                    context.file_specs,
                 )
             )
             raw_scope = _parse_gemini_scope_response(scope_response, scope_debug)
@@ -258,20 +251,15 @@ class GeminiExtractionProvider:
             media_types=_media_types(file_specs),
         )
 
-        with tempfile.TemporaryDirectory(prefix="ai2-gemini-upload-") as temp_dir:
-            uploaded_files = [
-                self._upload_file(spec, Path(temp_dir), index)
-                for index, spec in enumerate(file_specs, start=1)
-            ]
-            contents = _build_multifile_contents(prompt, uploaded_files)
-            response = self._provider._client.models.generate_content(
-                model=self._provider.model,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0,
-                ),
-            )
+        contents = _build_multifile_contents(prompt, file_specs)
+        response = self._provider._client.models.generate_content(
+            model=self._provider.model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0,
+            ),
+        )
 
         gemini_extraction = _parse_gemini_extraction_response(response, debug_capture)
         extraction = map_gemini_extraction_to_requirement_extraction(
@@ -290,7 +278,7 @@ class GeminiExtractionProvider:
 
     def _enrich_discovery_with_context(
         self,
-        context: _UploadedRequirementContext,
+        context: _RequirementFileContext,
         discovery: GeminiDiscoveryResult,
         batch_size: int | None = None,
         debug_capture: GeminiEnrichmentDebugCapture | None = None,
@@ -313,7 +301,7 @@ class GeminiExtractionProvider:
                         context.paths,
                         media_types=_media_types(context.file_specs),
                     ),
-                    context.uploaded_files,
+                    context.file_specs,
                 )
             )
             batch_result = _parse_gemini_enrichment_response(response)
@@ -334,28 +322,6 @@ class GeminiExtractionProvider:
             debug_capture.model = self._provider.model
         return merged
 
-    def _upload_file(
-        self,
-        spec: _LocalFileSpec,
-        temp_dir: Path,
-        index: int,
-    ):
-        upload_path = spec.path
-        if _needs_ascii_upload_copy(spec.path):
-            upload_path = temp_dir / f"source-{index}{spec.safe_suffix}"
-            shutil.copy2(spec.path, upload_path)
-
-        try:
-            return self._provider._client.files.upload(
-                file=upload_path,
-                config=types.UploadFileConfig(
-                    mime_type=spec.mime_type,
-                    display_name=spec.path.name,
-                ),
-            )
-        except Exception as exc:
-            raise RuntimeError(f"No se pudo subir el archivo a Gemini: {spec.path}") from exc
-
     def _generate_json(self, contents):
         return self._provider._client.models.generate_content(
             model=self._provider.model,
@@ -371,30 +337,21 @@ class _LocalFileSpec:
     def __init__(self, path: Path, mime_type: str) -> None:
         self.path = path
         self.mime_type = mime_type
-        self.safe_suffix = _safe_suffix_for_mime_type(mime_type)
 
 
-class _UploadedRequirementContext:
+class _RequirementFileContext:
     def __init__(self, owner: GeminiExtractionProvider, files: list[Path]) -> None:
         self._owner = owner
         self.paths = [Path(file) for file in files]
         self.file_specs: list[_LocalFileSpec] = []
-        self.uploaded_files = []
-        self._temp_dir: tempfile.TemporaryDirectory | None = None
 
-    def __enter__(self) -> _UploadedRequirementContext:
+    def __enter__(self) -> _RequirementFileContext:
+        _ = self._owner
         self.file_specs = [_prepare_file_spec(path) for path in self.paths]
-        self._temp_dir = tempfile.TemporaryDirectory(prefix="ai2-gemini-upload-")
-        temp_path = Path(self._temp_dir.name)
-        self.uploaded_files = [
-            self._owner._upload_file(spec, temp_path, index)
-            for index, spec in enumerate(self.file_specs, start=1)
-        ]
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
-        if self._temp_dir is not None:
-            self._temp_dir.cleanup()
+        return None
 
 
 @dataclass
@@ -640,40 +597,18 @@ def _pdf_page_count(path: Path) -> int | None:
     return count or None
 
 
-def _needs_ascii_upload_copy(path: Path) -> bool:
-    try:
-        path.name.encode("ascii")
-    except UnicodeEncodeError:
-        return True
-
-    return False
-
-
-def _safe_suffix_for_mime_type(mime_type: str) -> str:
-    if mime_type == "application/pdf":
-        return ".pdf"
-    if mime_type == "image/jpeg":
-        return ".jpg"
-    if mime_type == "image/png":
-        return ".png"
-    if mime_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
-        return ".xlsx"
-
-    return ".bin"
-
-
-def _build_multifile_contents(prompt: str, uploaded_files: list) -> list[types.Part]:
+def _build_multifile_contents(prompt: str, file_specs: list[_LocalFileSpec]) -> list[types.Part]:
     parts = [types.Part.from_text(text=prompt)]
-    for uploaded_file in uploaded_files:
-        if not uploaded_file.uri:
-            raise ValueError("Gemini Files API no devolvio URI para un archivo subido.")
-        if not uploaded_file.mime_type:
-            raise ValueError("Gemini Files API no devolvio MIME type para un archivo subido.")
-        parts.append(
-            types.Part.from_uri(
-                file_uri=uploaded_file.uri,
-                mime_type=uploaded_file.mime_type,
-            )
-        )
+    parts.extend(_build_inline_file_parts(file_specs))
 
     return parts
+
+
+def _build_inline_file_parts(file_specs: list[_LocalFileSpec]) -> list[types.Part]:
+    return [
+        types.Part.from_bytes(
+            data=spec.path.read_bytes(),
+            mime_type=spec.mime_type,
+        )
+        for spec in file_specs
+    ]
