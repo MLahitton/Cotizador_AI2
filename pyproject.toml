@@ -1,0 +1,41 @@
+[project]
+name = "cotizador-ai2"
+version = "0.1.0"
+description = "Servicio de inteligencia artificial para extracción multimodal de requerimientos de Steel and Glass."
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "pydantic-settings",
+    "google-genai",
+    "python-multipart",
+    "openpyxl",
+    "pillow",
+    "httpx",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests/test_gemini_discovery_provider.py",
+    "tests/test_gemini_enrichment_pipeline.py",
+    "tests/test_gemini_extraction_mapper.py",
+    "tests/test_gemini_extraction_provider_files.py",
+    "tests/test_gemini_provider.py",
+    "tests/test_requirements_api.py",
+    "tests/test_requirement_extraction.py",
+]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
