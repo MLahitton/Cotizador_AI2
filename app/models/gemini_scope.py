@@ -16,6 +16,7 @@ class GeminiScopeClassification(BaseModel):
     reason: str | None = None
     in_scope_components: list[str] = Field(default_factory=list)
     out_of_scope_components: list[str] = Field(default_factory=list)
+    evidence_source_ids: list[str] = Field(default_factory=list)
     evidence_notes: list[str] = Field(default_factory=list)
     confidence: float | None = None
 

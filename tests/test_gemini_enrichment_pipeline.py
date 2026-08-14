@@ -3,7 +3,11 @@ from pathlib import Path
 import app.providers.gemini_extraction as provider_module
 from app.models.common import ExtractionStatus
 from app.models.gemini_discovery import GeminiDiscoveryResult, GeminiElementDiscovery
-from app.models.gemini_enrichment import GeminiElementEnrichment, GeminiEnrichmentResult
+from app.models.gemini_enrichment import (
+    GeminiElementEnrichment,
+    GeminiEnrichmentEvidenceNote,
+    GeminiEnrichmentResult,
+)
 from app.models.requirement import ExtractionMetadata, Requirement, TokenUsage
 from app.models.requirement_extraction import RequirementExtraction
 from app.providers.gemini_extraction import (
@@ -119,6 +123,19 @@ def _scope_response(*items: tuple[str, str], usage: tuple[int, int, int] | None 
     )
     usage_metadata = _UsageMetadata(*usage) if usage else None
     return _FakeResponse(f'{{"elements": [{elements}]}}', usage_metadata)
+
+
+def _scope_response_with_sources(
+    temporary_id: str,
+    scope: str,
+    source_id: str,
+) -> _FakeResponse:
+    return _FakeResponse(
+        '{"elements": ['
+        f'{{"temporary_id": "{temporary_id}", "scope": "{scope}", '
+        f'"evidence_source_ids": ["{source_id}"]}}'
+        "]}"
+    )
 
 
 def test_batching_zero_elements() -> None:
@@ -250,6 +267,7 @@ def test_full_pipeline_mapper_receives_all_items_and_reuses_uploads(
         model_provider,
         model,
         default_source_id="text-input",
+        allowed_source_ids=None,
     ):
         mapper_calls.append(gemini_extraction)
         return mapped_result
@@ -318,6 +336,7 @@ def test_full_pipeline_scope_selects_only_allowed_items(tmp_path: Path, monkeypa
         model_provider,
         model,
         default_source_id="text-input",
+        allowed_source_ids=None,
     ):
         mapper_calls.append(gemini_extraction)
         return mapped_result
@@ -360,6 +379,26 @@ def test_scope_missing_defaults_to_uncertain_and_duplicate_is_warned(tmp_path: P
     assert [item.scope.value for item in scope.elements] == ["in_scope_full", "uncertain"]
     assert any("duplicate scope temporary_id" in warning for warning in scope.warnings)
     assert any("missing scope" in warning for warning in scope.warnings)
+
+
+def test_discovery_and_scope_source_ids_survive_debug_models(tmp_path: Path) -> None:
+    discovery = GeminiDiscoveryResult(
+        elements=[
+            GeminiElementDiscovery(
+                temporary_id="a",
+                reference="V-01",
+                source_ids=["source-1", "source-3"],
+            )
+        ]
+    )
+    provider = _provider_with_responses(
+        [_scope_response_with_sources("a", "in_scope_full", "source-3")]
+    )
+
+    scope = provider.classify_scope_from_files([_pdf(tmp_path)], discovery)
+
+    assert discovery.elements[0].source_ids == ["source-1", "source-3"]
+    assert scope.elements[0].evidence_source_ids == ["source-3"]
 
 
 def test_scope_prompt_requires_positive_exclusion_for_out_of_scope() -> None:
@@ -462,6 +501,7 @@ def test_uncertain_scope_continues_to_enrichment(tmp_path: Path, monkeypatch) ->
         model_provider,
         model,
         default_source_id="text-input",
+        allowed_source_ids=None,
     ):
         mapper_calls.append(gemini_extraction)
         return mapped_result
@@ -496,6 +536,13 @@ def test_enrichment_to_gemini_extraction_preserves_context_as_structured_items()
                     temporary_id="item-1",
                     occurrence_context="Habitacion de servicio (Page 1, Detail 1)",
                     variant_context="Alternativa con vidrio claro",
+                    evidence=[
+                        GeminiEnrichmentEvidenceNote(
+                            source_id="source-1",
+                            text="VIDRIO 6mm",
+                            page_number=2,
+                        )
+                    ],
                     evidence_notes=["Nota: TODOS LOS VIDRIOS SON DE ESPESOR DE 6mm"],
                     status=ExtractionStatus.EXPLICIT,
                     confidence=0.8,
@@ -511,4 +558,6 @@ def test_enrichment_to_gemini_extraction_preserves_context_as_structured_items()
         == "Habitacion de servicio (Page 1, Detail 1)"
     )
     assert element.variants[0].label == "Alternativa con vidrio claro"
+    assert element.evidence_items[0].source_id == "source-1"
+    assert element.evidence_items[0].page_number == 2
     assert element.evidence == "Nota: TODOS LOS VIDRIOS SON DE ESPESOR DE 6mm"

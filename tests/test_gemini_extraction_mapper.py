@@ -271,6 +271,162 @@ def test_mapper_promotes_element_evidence_to_root_evidence_and_ids() -> None:
     assert element.technical_notes == []
 
 
+def test_mapper_preserves_structured_element_evidence_source_ids() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="v-01",
+                evidence_items=[
+                    GeminiEvidence(source_id="source-2", text="VIDRIO TEMPLADO 8mm"),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(
+        extraction,
+        default_source_id=None,
+        allowed_source_ids=["source-1", "source-2", "source-3"],
+    )
+
+    assert result.evidence[0].source_id == "source-2"
+    assert result.evidence[0].extracted_text == "VIDRIO TEMPLADO 8mm"
+    assert result.elements[0].evidence_ids == ["evidence-1"]
+
+
+def test_mapper_preserves_two_element_evidences_from_two_sources() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="v-03",
+                evidence_items=[
+                    GeminiEvidence(source_id="source-1", text="Detalle V03"),
+                    GeminiEvidence(source_id="source-2", text="Cuadro V03"),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(
+        extraction,
+        default_source_id=None,
+        allowed_source_ids=["source-1", "source-2"],
+    )
+
+    assert [evidence.source_id for evidence in result.evidence] == ["source-1", "source-2"]
+    assert [evidence.extracted_text for evidence in result.evidence] == [
+        "Detalle V03",
+        "Cuadro V03",
+    ]
+    assert result.elements[0].evidence_ids == ["evidence-1", "evidence-2"]
+
+
+def test_mapper_element_evidence_ids_only_include_own_evidence() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="v-01",
+                evidence_items=[GeminiEvidence(source_id="source-1", text="Dato V01")],
+            ),
+            GeminiElement(
+                id="v-02",
+                evidence_items=[GeminiEvidence(source_id="source-2", text="Dato V02")],
+            ),
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(
+        extraction,
+        default_source_id=None,
+        allowed_source_ids=["source-1", "source-2"],
+    )
+
+    assert result.elements[0].evidence_ids == ["evidence-1"]
+    assert result.elements[1].evidence_ids == ["evidence-2"]
+
+
+def test_mapper_unknown_source_id_warns_without_arbitrary_reassignment() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="v-01",
+                evidence_items=[
+                    GeminiEvidence(source_id="source-99", text="Dato con fuente desconocida"),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(
+        extraction,
+        default_source_id=None,
+        allowed_source_ids=["source-1", "source-2"],
+    )
+
+    assert result.evidence[0].source_id == "unknown"
+    assert result.evidence[0].extracted_text == "Dato con fuente desconocida"
+    assert any(warning.code == "unknown_evidence_source" for warning in result.warnings)
+
+
+def test_mapper_multifile_missing_source_warns_without_source_1_fallback() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="v-01",
+                evidence_items=[GeminiEvidence(text="Dato sin source_id")],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(
+        extraction,
+        default_source_id=None,
+        allowed_source_ids=["source-1", "source-2"],
+    )
+
+    assert result.evidence[0].source_id == "unknown"
+    assert result.evidence[0].source_id != "source-1"
+    assert any(warning.code == "missing_evidence_source" for warning in result.warnings)
+
+
+def test_mapper_preserves_pdf_xlsx_and_image_evidence_fields() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="v-01",
+                evidence_items=[
+                    GeminiEvidence(source_id="source-1", text="PDF note", page_number=4),
+                    GeminiEvidence(
+                        source_id="source-2",
+                        text="XLSX row",
+                        sheet_name="APTO85",
+                        cell_range="B14:H14",
+                    ),
+                    GeminiEvidence(
+                        source_id="source-3",
+                        text="Foto detalle",
+                        visual_description="Se observa vidrio",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(
+        extraction,
+        default_source_id=None,
+        allowed_source_ids=["source-1", "source-2", "source-3"],
+    )
+
+    assert result.evidence[0].page_number == 4
+    assert result.evidence[0].sheet_name is None
+    assert result.evidence[1].sheet_name == "APTO85"
+    assert result.evidence[1].cell_range == "B14:H14"
+    assert result.evidence[1].page_number is None
+    assert result.evidence[2].visual_description == "Se observa vidrio"
+    assert result.evidence[2].region is None
+
+
 def test_mapper_preserves_root_evidence_source_information() -> None:
     extraction = GeminiExtraction(
         evidence=[
@@ -348,3 +504,207 @@ def test_mapper_preserves_missing_fields_repeated_references_order_and_metadata(
     assert result.extraction_metadata.model == "gemini-test"
     assert result.extraction_metadata.element_count == 2
     assert result.extraction_metadata.status == "ambiguous"
+
+
+def test_mapper_normalizes_area_labels_without_losing_raw_values() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                measurements=[
+                    GeminiMeasurement(type="custom", label=label, value=1.25, unit="m2")
+                    for label in ["M2", "M²", "m2", "m²"]
+                ]
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert [measurement.type for measurement in result.elements[0].measurements] == [
+        "area",
+        "area",
+        "area",
+        "area",
+    ]
+    assert [measurement.raw_label for measurement in result.elements[0].measurements] == [
+        "M2",
+        "M²",
+        "m2",
+        "m²",
+    ]
+    assert all(measurement.raw_value == 1.25 for measurement in result.elements[0].measurements)
+    assert all(measurement.raw_unit == "m2" for measurement in result.elements[0].measurements)
+
+
+def test_mapper_does_not_warn_when_reported_area_matches_dimensions() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                measurements=[
+                    GeminiMeasurement(type="width", value=2000, unit="mm"),
+                    GeminiMeasurement(type="height", value=2500, unit="mm"),
+                    GeminiMeasurement(type="custom", label="M2", value=5.0, unit="m2"),
+                ]
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert not any(warning.code == "MEASUREMENT_AREA_MISMATCH" for warning in result.warnings)
+
+
+def test_mapper_accepts_small_reported_area_rounding_difference() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                measurements=[
+                    GeminiMeasurement(type="width", value=3090, unit="mm"),
+                    GeminiMeasurement(type="height", value=1900, unit="mm"),
+                    GeminiMeasurement(type="custom", label="M2", value=5.87, unit="m2"),
+                ]
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert not any(warning.code == "MEASUREMENT_AREA_MISMATCH" for warning in result.warnings)
+
+
+def test_mapper_warns_for_large_reported_area_mismatch_without_overwriting_value() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="element-pv",
+                evidence_items=[
+                    GeminiEvidence(
+                        id="evidence-123",
+                        source_id="source-1",
+                        text="ANCHO:5320 ALTO:2500 M2:1.33",
+                    )
+                ],
+                measurements=[
+                    GeminiMeasurement(type="width", value=5320, unit="mm"),
+                    GeminiMeasurement(type="height", value=2500, unit="mm"),
+                    GeminiMeasurement(type="custom", label="M2", value=1.33, unit="m2"),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(
+        extraction,
+        default_source_id="source-1",
+    )
+
+    area = result.elements[0].measurements[2]
+    assert area.type == "area"
+    assert area.value == 1.33
+    assert area.status == ExtractionStatus.EXPLICIT
+    warning = next(
+        warning
+        for warning in result.warnings
+        if warning.code == "MEASUREMENT_AREA_MISMATCH"
+    )
+    assert "13.30 m2" in warning.message
+    assert warning.element_ids == ["element-pv"]
+    assert warning.evidence_ids == ["evidence-123"]
+    assert warning.source_ids == ["source-1"]
+
+
+def test_mapper_does_not_warn_without_reported_area() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                measurements=[
+                    GeminiMeasurement(type="width", value=2000, unit="mm"),
+                    GeminiMeasurement(type="height", value=2500, unit="mm"),
+                ]
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert [measurement.type for measurement in result.elements[0].measurements] == [
+        "width",
+        "height",
+    ]
+    assert not any(warning.code == "MEASUREMENT_AREA_MISMATCH" for warning in result.warnings)
+
+
+def test_mapper_does_not_warn_for_reported_area_without_dimensions() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                measurements=[
+                    GeminiMeasurement(type="custom", label="M2", value=1.33, unit="m2"),
+                ]
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert result.elements[0].measurements[0].type == "area"
+    assert not any(warning.code == "MEASUREMENT_AREA_MISMATCH" for warning in result.warnings)
+
+
+def test_mapper_propagates_single_element_evidence_to_measurements() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                evidence_items=[
+                    GeminiEvidence(
+                        id="evidence-123",
+                        source_id="source-1",
+                        text="ALTO:1800 ANCHO:600 M2:1.08",
+                    )
+                ],
+                measurements=[
+                    GeminiMeasurement(type="height", value=1800, unit="mm"),
+                    GeminiMeasurement(type="width", value=600, unit="mm"),
+                    GeminiMeasurement(type="custom", label="M2", value=1.08, unit="m2"),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(
+        extraction,
+        default_source_id="source-1",
+    )
+
+    assert [measurement.evidence_ids for measurement in result.elements[0].measurements] == [
+        ["evidence-123"],
+        ["evidence-123"],
+        ["evidence-123"],
+    ]
+
+
+def test_mapper_does_not_assign_ambiguous_multiple_evidences_to_measurements() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                evidence_items=[
+                    GeminiEvidence(id="evidence-1", source_id="source-1", text="ANCHO:600"),
+                    GeminiEvidence(id="evidence-2", source_id="source-1", text="ALTO:1800"),
+                ],
+                measurements=[
+                    GeminiMeasurement(type="height", value=1800, unit="mm"),
+                    GeminiMeasurement(type="width", value=600, unit="mm"),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(
+        extraction,
+        default_source_id="source-1",
+    )
+
+    assert [measurement.evidence_ids for measurement in result.elements[0].measurements] == [
+        [],
+        [],
+    ]

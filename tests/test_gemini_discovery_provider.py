@@ -92,8 +92,9 @@ def test_discovery_from_multiple_files_sends_all_files_together(tmp_path: Path) 
     assert len(provider._provider._client.files.uploads) == 2
     call = provider._provider._client.models.calls[0]
     assert len(call["contents"]) == 3
-    assert "source-1: planos.pdf" in call["contents"][0].text
-    assert "source-2: foto.png" in call["contents"][0].text
+    assert "AVAILABLE SOURCES" in call["contents"][0].text
+    assert "source-1 | planos.pdf | application/pdf" in call["contents"][0].text
+    assert "source-2 | foto.png | image/png" in call["contents"][0].text
 
 
 def test_discovery_debug_capture_stores_raw_and_validated_result(tmp_path: Path) -> None:

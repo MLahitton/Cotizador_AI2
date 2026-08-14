@@ -11,6 +11,7 @@ from app.models.gemini_enrichment import (
 from app.models.gemini_extraction import (
     GeminiComponent,
     GeminiElement,
+    GeminiEvidence,
     GeminiExtraction,
     GeminiGlass,
     GeminiMeasurement,
@@ -149,6 +150,7 @@ def _enriched_to_gemini_element(item: GeminiElementEnrichment, index: int) -> Ge
         ],
         occurrences=_occurrences_from_context(item),
         variants=_variants_from_context(item),
+        evidence_items=[_evidence_note(evidence) for evidence in item.evidence],
         evidence="\n".join(item.evidence_notes) or None,
         missing_or_unknown=list(item.missing_or_unknown),
         status=item.status,
@@ -218,6 +220,18 @@ def _component(item: GeminiEnrichmentComponent, index: int) -> GeminiComponent:
         accessories=[],
         status=item.status,
         confidence=item.confidence,
+        notes=item.notes,
+    )
+
+
+def _evidence_note(item) -> GeminiEvidence:
+    return GeminiEvidence(
+        source_id=item.source_id,
+        text=item.text,
+        page_number=item.page_number,
+        sheet_name=item.sheet_name,
+        cell_range=item.cell_range,
+        visual_description=item.visual_description,
         notes=item.notes,
     )
 

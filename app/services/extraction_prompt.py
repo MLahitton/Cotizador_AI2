@@ -13,6 +13,7 @@ Estructura JSON esperada:
     "reference": string|null,
     "name": string|null,
     "category_raw": string|null,
+    "source_ids": [string],
     "source_hint": string|null,
     "status": "explicit"|"inferred"|"ambiguous"|"unknown"|"not_applicable"|null,
     "confidence": number|null
@@ -30,6 +31,10 @@ Instrucciones:
 - NO te detengas despues de encontrar algunos ejemplos.
 - Recorre integralmente todas las paginas, imagenes, tablas, cuadros, notas y dibujos.
 - Conserva todas las referencias distintas realmente encontradas.
+- Usa source_ids para indicar las fuentes disponibles donde aparece o se relaciona el
+  discovery. Solo puedes usar IDs listados en AVAILABLE SOURCES.
+- Si no hay evidencia suficiente para asignar source_ids, devuelve source_ids=[] y
+  conserva source_hint como texto auxiliar.
 - No conviertas rangos como "V-01 al V-30" en referencias inexistentes.
 - No inventes elementos.
 - No descartes elementos incompletos.
@@ -66,6 +71,7 @@ Estructura JSON esperada:
     "reason": string|null,
     "in_scope_components": [string],
     "out_of_scope_components": [string],
+    "evidence_source_ids": [string],
     "evidence_notes": [string],
     "confidence": number|null
   }],
@@ -97,6 +103,10 @@ Contexto de alcance:
 
 Instrucciones:
 - Usa todas las fuentes disponibles.
+- Usa evidence_source_ids para indicar las fuentes disponibles que respaldan la
+  clasificacion. Solo puedes usar IDs listados en AVAILABLE SOURCES.
+- Si no hay fuente estructurada segura, devuelve evidence_source_ids=[] y conserva la
+  explicacion en reason/evidence_notes.
 - No inventes vidrio ni componentes.
 - No excluyas por nombre solamente.
 - OUT_OF_SCOPE REQUIERE EVIDENCIA POSITIVA DE EXCLUSION.
@@ -148,6 +158,9 @@ Estructura JSON esperada:
     "components": [component_item],
     "occurrence_context": string|null,
     "variant_context": string|null,
+    "evidence": [{"source_id": string|null, "text": string|null,
+      "page_number": number|null, "sheet_name": string|null, "cell_range": string|null,
+      "visual_description": string|null, "notes": string|null}],
     "evidence_notes": [string],
     "missing_or_unknown": [string],
     "status": status|null,
@@ -167,6 +180,14 @@ profiles, status, confidence, notes.
 Instrucciones:
 - NO omitas ninguno de los discoveries recibidos.
 - Analiza todas las fuentes para obtener informacion del discovery correspondiente.
+- Cuando una afirmacion tenga trazabilidad clara, agregala en evidence con source_id,
+  text, page_number, sheet_name, cell_range o visual_description segun aplique.
+- Usa exclusivamente los source_id listados en AVAILABLE SOURCES; no inventes source_id.
+- Cuando una afirmacion provenga de mas de una fuente, puede indicar varias evidencias.
+- Mantén separadas afirmaciones contradictorias entre fuentes; no fusiones evidencia
+  incompatible silenciosamente.
+- Si no puedes asociar una evidencia a una fuente de forma segura, conserva el texto en
+  evidence_notes y no inventes source_id.
 - Relaciona informacion entre paginas, tablas y dibujos cuando pertenezca a ese item.
 - No inventes datos, referencias ni sistemas comerciales.
 - Si corriges name/category_raw por evidencia, conserva el temporary_id.
@@ -238,6 +259,10 @@ Estructura JSON compacta disponible:
     "occurrences": [occurrence],
     "variants": [variant],
     "evidence": string|null,
+    "evidence_items": [{"source_id": string|null, "type": string|null,
+      "text": string|null, "visual_description": string|null,
+      "page_number": number|null, "sheet_name": string|null,
+      "cell_range": string|null, "notes": string|null}],
     "missing_or_unknown": [string],
     "conflicts": [string],
     "relationships": [string],
@@ -247,6 +272,7 @@ Estructura JSON compacta disponible:
   }],
   "evidence": [{"id": string|null, "source_id": string|null, "type": string|null,
     "text": string|null, "visual_description": string|null, "location": string|null,
+    "page_number": number|null, "sheet_name": string|null, "cell_range": string|null,
     "status": status|null, "confidence": number|null, "notes": string|null}],
   "relationships": [{"description": string|null, "from_element": string|null,
     "to_element": string|null, "type": string|null, "status": status|null,
@@ -275,6 +301,10 @@ Instrucciones:
 - Preserva informacion explicita, inferida, ambigua, desconocida y no aplicable usando
   los status: explicit, inferred, ambiguous, unknown, not_applicable.
 - Relaciona informacion entre fuentes cuando parezca referirse al mismo elemento.
+- Usa evidence_items en cada elemento cuando puedas asociar una evidencia a un
+  source_id de AVAILABLE SOURCES. No inventes source_id.
+- Si una evidencia no tiene fuente estructurada segura, conserva el texto libre sin
+  inventar pagina, region, sheet ni cell.
 - No inventes sistemas, vidrio, materiales, medidas, cantidades, perfiles ni accesorios.
 - Conserva texto libre cuando no puedas normalizar.
 - Las medidas pueden existir aunque no conozcas la categoria.
@@ -301,31 +331,45 @@ Texto recibido:
 """.strip()
 
 
-def build_file_discovery_prompt(files: list[Path]) -> str:
-    file_lines = "\n".join(
-        f"- source-{index}: {path.name}" for index, path in enumerate(files, start=1)
-    )
+def build_file_discovery_prompt(
+    files: list[Path],
+    media_types: list[str | None] | None = None,
+) -> str:
+    source_context = _format_available_sources(files, media_types)
 
     return f"""
 {ELEMENT_DISCOVERY_PROMPT}
 
-Fuentes recibidas:
-{file_lines}
+AVAILABLE SOURCES
+{source_context}
+
+Usa exclusivamente estos source_id. No inventes source_id.
 """.strip()
 
 
-def build_file_scope_prompt(discoveries: list) -> str:
+def build_file_scope_prompt(
+    discoveries: list,
+    files: list[Path] | None = None,
+    media_types: list[str | None] | None = None,
+) -> str:
+    source_context = _format_available_sources(files or [], media_types)
     discovery_lines = "\n".join(
         (
             f"- temporary_id={item.temporary_id or f'discovery-{index}'!r}; "
             f"reference={item.reference!r}; name={item.name!r}; "
-            f"category_raw={item.category_raw!r}; source_hint={item.source_hint!r}"
+            f"category_raw={item.category_raw!r}; source_ids={item.source_ids!r}; "
+            f"source_hint={item.source_hint!r}"
         )
         for index, item in enumerate(discoveries, start=1)
     )
 
     return f"""
 {ELEMENT_SCOPE_PROMPT}
+
+AVAILABLE SOURCES
+{source_context}
+
+Usa exclusivamente estos source_id. No inventes source_id.
 
 Discoveries a clasificar:
 {discovery_lines}
@@ -335,13 +379,17 @@ Discoveries a clasificar:
 def build_file_enrichment_prompt(
     discoveries: list,
     scope_by_temporary_id: dict | None = None,
+    files: list[Path] | None = None,
+    media_types: list[str | None] | None = None,
 ) -> str:
     scope_by_temporary_id = scope_by_temporary_id or {}
+    source_context = _format_available_sources(files or [], media_types)
     discovery_lines = "\n".join(
         (
             f"- temporary_id={item.temporary_id or f'discovery-{index}'!r}; "
             f"reference={item.reference!r}; "
             f"name={item.name!r}; category_raw={item.category_raw!r}; "
+            f"source_ids={item.source_ids!r}; "
             f"source_hint={item.source_hint!r}; "
             f"scope={scope_by_temporary_id.get(item.temporary_id or f'discovery-{index}')!r}"
         )
@@ -350,6 +398,11 @@ def build_file_enrichment_prompt(
 
     return f"""
 {ELEMENT_ENRICHMENT_PROMPT}
+
+AVAILABLE SOURCES
+{source_context}
+
+Usa exclusivamente estos source_id. No inventes source_id.
 
 Discoveries a enriquecer en este batch:
 {discovery_lines}
@@ -369,10 +422,9 @@ def build_file_extraction_prompt(
     *,
     project_id: str | None = None,
     requirement_id: str | None = None,
+    media_types: list[str | None] | None = None,
 ) -> str:
-    file_lines = "\n".join(
-        f"- source-{index}: {path.name}" for index, path in enumerate(files, start=1)
-    )
+    source_context = _format_available_sources(files, media_types)
     identifiers = []
     if project_id:
         identifiers.append(f"project_id: {project_id}")
@@ -386,8 +438,25 @@ def build_file_extraction_prompt(
 IDs internos:
 {identifier_text}
 
-Fuentes recibidas:
-{file_lines}
+AVAILABLE SOURCES
+{source_context}
 
 Cuando generes evidencia, usa source_id con el identificador source-N correspondiente.
+Usa exclusivamente estos source_id. No inventes source_id.
 """.strip()
+
+
+def _format_available_sources(
+    files: list[Path],
+    media_types: list[str | None] | None = None,
+) -> str:
+    if not files:
+        return "- none"
+
+    media_types = media_types or [None] * len(files)
+    lines = []
+    for index, path in enumerate(files, start=1):
+        media_type = media_types[index - 1] if index - 1 < len(media_types) else None
+        media_text = f" | {media_type}" if media_type else ""
+        lines.append(f"source-{index} | {path.name}{media_text}")
+    return "\n".join(lines)

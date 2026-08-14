@@ -108,6 +108,7 @@ def _build_report(
     discovery_usage, enrichment_usage, final_usage = _usage_tuple(extraction, debug_capture)
     scope_usage = debug_capture.scope_debug.token_usage if debug_capture.scope_debug else None
     scope_counts = _scope_counts(scope)
+    traceability_counts = _traceability_counts(extraction, discovery, scope, enrichment)
     warnings = enrichment.warnings if enrichment is not None else []
     if scope is not None:
         warnings = scope.warnings + warnings
@@ -148,6 +149,14 @@ def _build_report(
 ## Warnings
 
 {warning_lines}
+
+## Traceability
+
+- sources: {traceability_counts["sources"]}
+- final_evidence: {traceability_counts["final_evidence"]}
+- discoveries_with_source_ids: {traceability_counts["discoveries_with_source_ids"]}
+- scope_with_source_ids: {traceability_counts["scope_with_source_ids"]}
+- enrichment_structured_evidence: {traceability_counts["enrichment_structured_evidence"]}
 
 ## Discovery JSON
 
@@ -246,6 +255,22 @@ def _scope_counts(scope) -> dict[str, int]:
     for item in scope.elements:
         counts[item.scope.value] += 1
     return counts
+
+
+def _traceability_counts(extraction, discovery, scope, enrichment) -> dict[str, int]:
+    return {
+        "sources": len(extraction.sources),
+        "final_evidence": len(extraction.evidence),
+        "discoveries_with_source_ids": sum(
+            1 for element in (discovery.elements if discovery else []) if element.source_ids
+        ),
+        "scope_with_source_ids": sum(
+            1 for element in (scope.elements if scope else []) if element.evidence_source_ids
+        ),
+        "enrichment_structured_evidence": sum(
+            len(element.evidence) for element in (enrichment.elements if enrichment else [])
+        ),
+    }
 
 
 def _json_block(model: BaseModel | None) -> str:

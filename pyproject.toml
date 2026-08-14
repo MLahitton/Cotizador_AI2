@@ -28,6 +28,8 @@ testpaths = [
     "tests/test_gemini_extraction_mapper.py",
     "tests/test_gemini_extraction_provider_files.py",
     "tests/test_gemini_provider.py",
+    "tests/test_historical_quote_models.py",
+    "tests/test_historical_workbook.py",
     "tests/test_requirements_api.py",
     "tests/test_requirement_extraction.py",
 ]

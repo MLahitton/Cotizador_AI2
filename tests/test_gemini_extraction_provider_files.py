@@ -1,3 +1,4 @@
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -96,6 +97,20 @@ def _provider_with_fake_client(
     return provider
 
 
+def _minimal_pdf_bytes(page_count: int) -> bytes:
+    page_objects = "\n".join(
+        f"{index + 3} 0 obj\n<< /Type /Page /Parent 2 0 R >>\nendobj"
+        for index in range(page_count)
+    )
+    return (
+        "%PDF-1.7\n"
+        "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+        "2 0 obj\n<< /Type /Pages /Count 3 >>\nendobj\n"
+        f"{page_objects}\n"
+        "%%EOF\n"
+    ).encode()
+
+
 def test_extract_from_files_uploads_all_files_in_one_model_call(tmp_path: Path) -> None:
     pdf = tmp_path / "planos.pdf"
     png = tmp_path / "foto.png"
@@ -116,13 +131,66 @@ def test_extract_from_files_uploads_all_files_in_one_model_call(tmp_path: Path) 
     assert call["model"] == "gemini-test"
     assert call["config"].response_schema is None
     assert len(call["contents"]) == 3
-    assert "source-1: planos.pdf" in call["contents"][0].text
-    assert "source-2: foto.png" in call["contents"][0].text
+    assert "AVAILABLE SOURCES" in call["contents"][0].text
+    assert "source-1 | planos.pdf | application/pdf" in call["contents"][0].text
+    assert "source-2 | foto.png | image/png" in call["contents"][0].text
     assert result.requirement.project_id == "project-1"
     assert result.requirement.requirement_id == "requirement-1"
     assert [source.id for source in result.sources] == ["source-1", "source-2"]
     assert [source.media_type for source in result.sources] == ["application/pdf", "image/png"]
     assert result.extraction_metadata.source_count == 2
+
+
+def test_extract_from_files_populates_pdf_page_count_when_available(tmp_path: Path) -> None:
+    pdf = tmp_path / "planos.pdf"
+    pdf.write_bytes(_minimal_pdf_bytes(page_count=3))
+    provider = _provider_with_fake_client()
+
+    result = provider.extract_from_files([pdf])
+
+    assert result.sources[0].media_type == "application/pdf"
+    assert result.sources[0].page_count == 3
+
+
+def test_extract_from_files_preserves_three_sources_order_and_evidence_source(
+    tmp_path: Path,
+) -> None:
+    pdf = tmp_path / "planos.pdf"
+    xlsx = tmp_path / "cuadro.xlsx"
+    png = tmp_path / "boceto.png"
+    pdf.write_bytes(b"%PDF-1.7\ncontent")
+    with zipfile.ZipFile(xlsx, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types></Types>")
+        archive.writestr("xl/workbook.xml", "<workbook></workbook>")
+    png.write_bytes(b"\x89PNG\r\n\x1a\ncontent")
+    provider = _provider_with_fake_client(
+        '{"elements": [{"id": "v-01", "evidence_items": ['
+        '{"source_id": "source-2", "text": "Evidencia desde foto"}'
+        "]}]}"
+    )
+
+    result = provider.extract_from_files([pdf, xlsx, png])
+    prompt = provider._provider._client.models.calls[0]["contents"][0].text
+
+    assert [source.id for source in result.sources] == ["source-1", "source-2", "source-3"]
+    assert [source.file_name for source in result.sources] == [
+        "planos.pdf",
+        "cuadro.xlsx",
+        "boceto.png",
+    ]
+    assert [source.source_type for source in result.sources] == [
+        "document",
+        "spreadsheet",
+        "image",
+    ]
+    assert "source-1 | planos.pdf | application/pdf" in prompt
+    assert (
+        "source-2 | cuadro.xlsx | "
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    ) in prompt
+    assert "source-3 | boceto.png | image/png" in prompt
+    assert result.evidence[0].source_id == "source-2"
+    assert result.elements[0].evidence_ids == ["evidence-1"]
 
 
 def test_extract_from_text_uses_json_text_without_response_schema() -> None:
@@ -198,6 +266,7 @@ def test_extract_from_text_calls_mapper_after_local_json_parse(monkeypatch) -> N
         model_provider,
         model,
         default_source_id="text-input",
+        allowed_source_ids=None,
     ):
         calls.append((gemini_extraction, model_provider, model))
         return mapped_result

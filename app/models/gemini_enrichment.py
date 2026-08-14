@@ -41,6 +41,16 @@ class GeminiEnrichmentGlass(BaseModel):
     notes: str | None = None
 
 
+class GeminiEnrichmentEvidenceNote(BaseModel):
+    source_id: str | None = None
+    text: str | None = None
+    page_number: int | None = None
+    sheet_name: str | None = None
+    cell_range: str | None = None
+    visual_description: str | None = None
+    notes: str | None = None
+
+
 class GeminiEnrichmentComponent(BaseModel):
     name: str | None = None
     type: str | None = None
@@ -74,6 +84,7 @@ class GeminiElementEnrichment(BaseModel):
     components: list[GeminiEnrichmentComponent] = Field(default_factory=list)
     occurrence_context: str | None = None
     variant_context: str | None = None
+    evidence: list[GeminiEnrichmentEvidenceNote] = Field(default_factory=list)
     evidence_notes: list[str] = Field(default_factory=list)
     missing_or_unknown: list[str] = Field(default_factory=list)
     status: ExtractionStatus | None = None

@@ -1,5 +1,7 @@
+import re
 import shutil
 import tempfile
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,6 +40,7 @@ SUPPORTED_FILE_MIME_TYPES = {
     "application/pdf",
     "image/jpeg",
     "image/png",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
 
 
@@ -79,7 +82,10 @@ class GeminiExtractionProvider:
 
         paths = [Path(file) for file in files]
         file_specs = [_prepare_file_spec(path) for path in paths]
-        prompt = build_file_discovery_prompt(paths)
+        prompt = build_file_discovery_prompt(
+            paths,
+            media_types=_media_types(file_specs),
+        )
 
         with tempfile.TemporaryDirectory(prefix="ai2-gemini-upload-") as temp_dir:
             uploaded_files = [
@@ -132,7 +138,11 @@ class GeminiExtractionProvider:
         with _UploadedRequirementContext(self, files) as context:
             response = self._generate_json(
                 _build_multifile_contents(
-                    build_file_scope_prompt(discovery.elements),
+                    build_file_scope_prompt(
+                        discovery.elements,
+                        context.paths,
+                        media_types=_media_types(context.file_specs),
+                    ),
                     context.uploaded_files,
                 )
             )
@@ -160,7 +170,10 @@ class GeminiExtractionProvider:
             discovery_debug = GeminiDiscoveryDebugCapture()
             discovery_response = self._generate_json(
                 _build_multifile_contents(
-                    build_file_discovery_prompt(context.paths),
+                    build_file_discovery_prompt(
+                        context.paths,
+                        media_types=_media_types(context.file_specs),
+                    ),
                     context.uploaded_files,
                 )
             )
@@ -171,7 +184,11 @@ class GeminiExtractionProvider:
             scope_debug = GeminiScopeDebugCapture()
             scope_response = self._generate_json(
                 _build_multifile_contents(
-                    build_file_scope_prompt(discovery.elements),
+                    build_file_scope_prompt(
+                        discovery.elements,
+                        context.paths,
+                        media_types=_media_types(context.file_specs),
+                    ),
                     context.uploaded_files,
                 )
             )
@@ -196,6 +213,7 @@ class GeminiExtractionProvider:
                 model_provider="google",
                 model=self._provider.model,
                 default_source_id=_default_evidence_source_id(context.file_specs),
+                allowed_source_ids=_source_ids(context.file_specs),
             )
             extraction.requirement.project_id = project_id
             extraction.requirement.requirement_id = requirement_id
@@ -237,6 +255,7 @@ class GeminiExtractionProvider:
             paths,
             project_id=project_id,
             requirement_id=requirement_id,
+            media_types=_media_types(file_specs),
         )
 
         with tempfile.TemporaryDirectory(prefix="ai2-gemini-upload-") as temp_dir:
@@ -260,6 +279,7 @@ class GeminiExtractionProvider:
             model_provider="google",
             model=self._provider.model,
             default_source_id=_default_evidence_source_id(file_specs),
+            allowed_source_ids=_source_ids(file_specs),
         )
         extraction.requirement.project_id = project_id
         extraction.requirement.requirement_id = requirement_id
@@ -287,7 +307,12 @@ class GeminiExtractionProvider:
         for batch in batches:
             response = self._generate_json(
                 _build_multifile_contents(
-                    build_file_enrichment_prompt(batch, scope_lookup(scope) if scope else None),
+                    build_file_enrichment_prompt(
+                        batch,
+                        scope_lookup(scope) if scope else None,
+                        context.paths,
+                        media_types=_media_types(context.file_specs),
+                    ),
                     context.uploaded_files,
                 )
             )
@@ -442,14 +467,31 @@ def _build_sources(file_specs: list[_LocalFileSpec]) -> list[Source]:
             id=f"source-{index}",
             file_name=spec.path.name,
             media_type=spec.mime_type,
-            source_type="document" if spec.mime_type == "application/pdf" else "image",
+            source_type=_source_type_for_mime_type(spec.mime_type),
+            page_count=_pdf_page_count(spec.path) if spec.mime_type == "application/pdf" else None,
         )
         for index, spec in enumerate(file_specs, start=1)
     ]
 
 
-def _default_evidence_source_id(file_specs: list[_LocalFileSpec]) -> str:
-    return "source-1" if len(file_specs) == 1 else "text-input"
+def _source_type_for_mime_type(mime_type: str) -> str:
+    if mime_type == "application/pdf":
+        return "document"
+    if mime_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+        return "spreadsheet"
+    return "image"
+
+
+def _default_evidence_source_id(file_specs: list[_LocalFileSpec]) -> str | None:
+    return "source-1" if len(file_specs) == 1 else None
+
+
+def _source_ids(file_specs: list[_LocalFileSpec]) -> list[str]:
+    return [f"source-{index}" for index, _ in enumerate(file_specs, start=1)]
+
+
+def _media_types(file_specs: list[_LocalFileSpec]) -> list[str]:
+    return [spec.mime_type for spec in file_specs]
 
 
 def _parse_gemini_extraction_response(
@@ -579,8 +621,23 @@ def _detect_supported_mime_type(path: Path) -> str:
         return "image/jpeg"
     if header.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as archive:
+            names = set(archive.namelist())
+        if "[Content_Types].xml" in names and "xl/workbook.xml" in names:
+            return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
     raise ValueError(f"No se pudo detectar un MIME type soportado para: {path}")
+
+
+def _pdf_page_count(path: Path) -> int | None:
+    try:
+        content = path.read_bytes()
+    except OSError:
+        return None
+
+    count = len(re.findall(rb"/Type\s*/Page\b", content))
+    return count or None
 
 
 def _needs_ascii_upload_copy(path: Path) -> bool:
@@ -599,6 +656,8 @@ def _safe_suffix_for_mime_type(mime_type: str) -> str:
         return ".jpg"
     if mime_type == "image/png":
         return ".png"
+    if mime_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+        return ".xlsx"
 
     return ".bin"
 

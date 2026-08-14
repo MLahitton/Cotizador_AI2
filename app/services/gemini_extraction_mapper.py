@@ -1,3 +1,5 @@
+import unicodedata
+
 from app.models.common import ExtractionStatus, NormalizedValue, TraceableValue
 from app.models.configuration import Configuration
 from app.models.element import Element
@@ -28,22 +30,30 @@ from app.models.specifications import (
     ProfileSpecification,
 )
 
+AREA_ABSOLUTE_TOLERANCE_M2 = 0.02
+AREA_RELATIVE_TOLERANCE = 0.02
+AREA_MISMATCH_WARNING_CODE = "MEASUREMENT_AREA_MISMATCH"
+
 
 def map_gemini_extraction_to_requirement_extraction(
     extraction: GeminiExtraction,
     *,
     model_provider: str | None = "google",
     model: str | None = None,
-    default_source_id: str = "text-input",
+    default_source_id: str | None = "text-input",
+    allowed_source_ids: list[str] | None = None,
 ) -> RequirementExtraction:
+    warnings: list[Warning] = []
     evidence = [
-        _map_evidence(item, index, default_source_id)
+        _map_evidence(item, index, default_source_id, allowed_source_ids, warnings)
         for index, item in enumerate(extraction.evidence, start=1)
     ]
     element_evidence = _build_element_evidence(
         extraction.elements,
         len(evidence),
         default_source_id,
+        allowed_source_ids,
+        warnings,
     )
     evidence.extend(element_evidence)
     evidence_ids = [item.id for item in evidence]
@@ -63,6 +73,7 @@ def map_gemini_extraction_to_requirement_extraction(
         )
         for index, item in enumerate(extraction.elements, start=1)
     ]
+    warnings.extend(_measurement_area_mismatch_warnings(elements, evidence))
 
     return RequirementExtraction(
         requirement=_map_requirement(extraction, evidence_ids),
@@ -70,7 +81,7 @@ def map_gemini_extraction_to_requirement_extraction(
         evidence=evidence,
         relationships=_map_relationship_notes(extraction.relationships),
         conflicts=_map_conflict_notes(extraction.conflicts),
-        warnings=_map_unknowns_to_warnings(extraction.unknown_fields),
+        warnings=[*warnings, *_map_unknowns_to_warnings(extraction.unknown_fields)],
         extraction_metadata=ExtractionMetadata(
             model_provider=model_provider,
             model=model,
@@ -254,7 +265,10 @@ def _map_element(
             for component_index, component in enumerate(item.components, start=1)
         ],
         geometry=_map_geometry(item.geometry, item.status, item.confidence, evidence_ids),
-        measurements=[_map_measurement(measurement) for measurement in item.measurements],
+        measurements=[
+            _map_measurement(measurement, evidence_ids)
+            for measurement in item.measurements
+        ],
         quantity=_map_optional_traceable_field(
             item.quantity,
             item.status,
@@ -333,9 +347,12 @@ def _optional_field_status(
     return status
 
 
-def _map_measurement(item: GeminiMeasurement) -> Measurement:
+def _map_measurement(
+    item: GeminiMeasurement,
+    evidence_ids: list[str] | None = None,
+) -> Measurement:
     return Measurement(
-        type=item.type or "unspecified",
+        type=_measurement_type(item),
         raw_label=item.label or item.text,
         value=item.value,
         unit=item.unit,
@@ -343,8 +360,157 @@ def _map_measurement(item: GeminiMeasurement) -> Measurement:
         raw_unit=item.unit,
         status=_status_for_value(item.value or item.text, item.status),
         confidence=item.confidence,
+        evidence_ids=_measurement_evidence_ids(evidence_ids),
         notes=item.notes or item.evidence,
     )
+
+
+def _measurement_evidence_ids(evidence_ids: list[str] | None) -> list[str]:
+    if evidence_ids is not None and len(evidence_ids) == 1:
+        return list(evidence_ids)
+
+    return []
+
+
+def _measurement_type(item: GeminiMeasurement) -> str:
+    raw_type = item.type or "unspecified"
+    if _is_area_measurement_label(item.label) or _is_area_measurement_label(item.type):
+        return "area"
+
+    return raw_type
+
+
+def _is_area_measurement_label(value: str | None) -> bool:
+    if value is None:
+        return False
+
+    normalized = _compact_text(value)
+    return normalized in {"m2", "m²", "area"}
+
+
+def _compact_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold().strip()
+    without_accents = "".join(
+        character
+        for character in unicodedata.normalize("NFD", normalized)
+        if unicodedata.category(character) != "Mn"
+    )
+    return without_accents.replace(" ", "").replace("_", "").replace("-", "")
+
+
+def _measurement_area_mismatch_warnings(
+    elements: list[Element],
+    evidence: list[Evidence],
+) -> list[Warning]:
+    warnings: list[Warning] = []
+    evidence_by_id = {item.id: item for item in evidence}
+    for element in elements:
+        width = _first_positive_measurement(element.measurements, "width")
+        height = _first_positive_measurement(element.measurements, "height")
+        reported_area = _first_positive_measurement(element.measurements, "area")
+        if width is None or height is None or reported_area is None:
+            continue
+
+        width_m = _linear_measurement_to_meters(width)
+        height_m = _linear_measurement_to_meters(height)
+        reported_area_m2 = _area_measurement_to_square_meters(reported_area)
+        if width_m is None or height_m is None or reported_area_m2 is None:
+            continue
+
+        derived_area_m2 = width_m * height_m
+        difference = abs(derived_area_m2 - reported_area_m2)
+        relative_difference = difference / derived_area_m2 if derived_area_m2 else 0
+        if (
+            difference <= AREA_ABSOLUTE_TOLERANCE_M2
+            or relative_difference <= AREA_RELATIVE_TOLERANCE
+        ):
+            continue
+
+        evidence_ids = _unique_ids(
+            width.evidence_ids + height.evidence_ids + reported_area.evidence_ids
+        )
+        source_ids = _unique_ids(
+            [
+                evidence_by_id[evidence_id].source_id
+                for evidence_id in evidence_ids
+                if evidence_id in evidence_by_id
+            ]
+        )
+        warnings.append(
+            Warning(
+                id=f"warning-{AREA_MISMATCH_WARNING_CODE.casefold()}-{len(warnings) + 1}",
+                code=AREA_MISMATCH_WARNING_CODE,
+                severity="warning",
+                message=(
+                    f"Reported area {reported_area_m2:.2f} m2 differs from derived area "
+                    f"{derived_area_m2:.2f} m2 using width "
+                    f"{_measurement_value_with_unit(width)} and height "
+                    f"{_measurement_value_with_unit(height)}."
+                ),
+                source_ids=source_ids,
+                element_ids=[element.id],
+                evidence_ids=evidence_ids,
+            )
+        )
+
+    return warnings
+
+
+def _first_positive_measurement(
+    measurements: list[Measurement],
+    measurement_type: str,
+) -> Measurement | None:
+    for measurement in measurements:
+        if measurement.type == measurement_type and measurement.value is not None:
+            if measurement.value > 0:
+                return measurement
+
+    return None
+
+
+def _linear_measurement_to_meters(measurement: Measurement) -> float | None:
+    if measurement.value is None or measurement.value <= 0:
+        return None
+
+    unit = _compact_text(measurement.unit or measurement.raw_unit or "mm")
+    if unit in {"mm", "milimetro", "milimetros"}:
+        return measurement.value / 1000
+    if unit in {"cm", "centimetro", "centimetros"}:
+        return measurement.value / 100
+    if unit in {"m", "metro", "metros"}:
+        return measurement.value
+
+    return None
+
+
+def _area_measurement_to_square_meters(measurement: Measurement) -> float | None:
+    if measurement.value is None or measurement.value <= 0:
+        return None
+
+    unit = _compact_text(measurement.unit or measurement.raw_unit or "m2")
+    if unit in {"m2", "m²", "metro2", "metros2", "metrocuadrado", "metroscuadrados"}:
+        return measurement.value
+    if unit in {"cm2", "cm²", "centimetro2", "centimetros2", "centimetroscuadrados"}:
+        return measurement.value / 10_000
+    if unit in {"mm2", "mm²", "milimetro2", "milimetros2", "milimetroscuadrados"}:
+        return measurement.value / 1_000_000
+
+    return None
+
+
+def _measurement_value_with_unit(measurement: Measurement) -> str:
+    unit = measurement.unit or measurement.raw_unit
+    if unit:
+        return f"{measurement.value:g} {unit}"
+    return f"{measurement.value:g}"
+
+
+def _unique_ids(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        if value and value not in result:
+            result.append(value)
+    return result
 
 
 def _map_geometry(
@@ -479,7 +645,10 @@ def _map_occurrence(
         level=_traceable(item.level, item.status, item.confidence, evidence_ids),
         typology=_traceable(item.typology, item.status, item.confidence, evidence_ids),
         quantity=_traceable(item.quantity, item.status, item.confidence, evidence_ids),
-        measurements=[_map_measurement(measurement) for measurement in item.measurements],
+        measurements=[
+            _map_measurement(measurement, evidence_ids)
+            for measurement in item.measurements
+        ],
         evidence_ids=evidence_ids,
         confidence=item.confidence,
         notes=item.notes or item.evidence,
@@ -491,7 +660,10 @@ def _map_variant(item: GeminiVariant, index: int, evidence_ids: list[str]) -> Va
         id=item.id or f"variant-{index}",
         label=item.label,
         reason=item.reason,
-        measurements=[_map_measurement(measurement) for measurement in item.measurements],
+        measurements=[
+            _map_measurement(measurement, evidence_ids)
+            for measurement in item.measurements
+        ],
         configuration=_map_configuration(
             item.configuration,
             item.status,
@@ -519,7 +691,10 @@ def _map_component(item: GeminiComponent, index: int, evidence_ids: list[str]) -
         role=_normalized(item.role, item.status, item.confidence, evidence_ids),
         quantity=_traceable(item.quantity, item.status, item.confidence, evidence_ids),
         geometry=_map_geometry(item.geometry, item.status, item.confidence, evidence_ids),
-        measurements=[_map_measurement(measurement) for measurement in item.measurements],
+        measurements=[
+            _map_measurement(measurement, evidence_ids)
+            for measurement in item.measurements
+        ],
         configuration=_map_configuration(
             item.configuration,
             item.status,
@@ -538,11 +713,27 @@ def _map_component(item: GeminiComponent, index: int, evidence_ids: list[str]) -
     )
 
 
-def _map_evidence(item: GeminiEvidence, index: int, default_source_id: str) -> Evidence:
+def _map_evidence(
+    item: GeminiEvidence,
+    index: int,
+    default_source_id: str | None,
+    allowed_source_ids: list[str] | None,
+    warnings: list[Warning],
+) -> Evidence:
+    source_id = _resolve_evidence_source_id(
+        item.source_id,
+        default_source_id,
+        allowed_source_ids,
+        warnings,
+        f"evidence-{index}",
+    )
     return Evidence(
         id=item.id or f"evidence-{index}",
-        source_id=item.source_id or default_source_id,
+        source_id=source_id,
         type=item.type or "text",
+        page_number=item.page_number,
+        sheet_name=item.sheet_name,
+        cell_range=item.cell_range,
         extracted_text=item.text,
         visual_description=item.visual_description or item.location,
         status=_status_for_value(item.text or item.visual_description, item.status),
@@ -554,17 +745,37 @@ def _map_evidence(item: GeminiEvidence, index: int, default_source_id: str) -> E
 def _build_element_evidence(
     elements: list[GeminiElement],
     existing_count: int,
-    default_source_id: str,
+    default_source_id: str | None,
+    allowed_source_ids: list[str] | None,
+    warnings: list[Warning],
 ) -> list[Evidence]:
     evidence: list[Evidence] = []
-    for element in elements:
+    for element_index, element in enumerate(elements, start=1):
+        for item in element.evidence_items:
+            evidence.append(
+                _map_evidence(
+                    item,
+                    existing_count + len(evidence) + 1,
+                    default_source_id,
+                    allowed_source_ids,
+                    warnings,
+                )
+            )
+
         if not element.evidence:
             continue
 
+        evidence_id = f"evidence-{existing_count + len(evidence) + 1}"
         evidence.append(
             Evidence(
-                id=f"evidence-{existing_count + len(evidence) + 1}",
-                source_id=default_source_id,
+                id=evidence_id,
+                source_id=_resolve_evidence_source_id(
+                    None,
+                    default_source_id,
+                    allowed_source_ids,
+                    warnings,
+                    f"element-{element_index}",
+                ),
                 type="text",
                 extracted_text=element.evidence,
                 status=_status_for_value(element.evidence, element.status),
@@ -582,17 +793,59 @@ def _element_evidence_ids_by_element_id(
     result: dict[str, list[str]] = {}
     evidence_index = 0
     for element_index, element in enumerate(elements, start=1):
-        if not element.evidence:
+        element_evidence_count = len(element.evidence_items) + (1 if element.evidence else 0)
+        if element_evidence_count == 0:
             continue
 
-        result[_element_id(element, element_index)] = [evidence[evidence_index].id]
-        evidence_index += 1
+        result[_element_id(element, element_index)] = [
+            item.id for item in evidence[evidence_index : evidence_index + element_evidence_count]
+        ]
+        evidence_index += element_evidence_count
 
     return result
 
 
 def _element_id(item: GeminiElement, index: int) -> str:
     return item.id or f"element-{index}"
+
+
+def _resolve_evidence_source_id(
+    source_id: str | None,
+    default_source_id: str | None,
+    allowed_source_ids: list[str] | None,
+    warnings: list[Warning],
+    context: str,
+) -> str:
+    if source_id:
+        if allowed_source_ids is not None and source_id not in allowed_source_ids:
+            warnings.append(
+                _warning(
+                    "unknown_evidence_source",
+                    f"Evidence {context} uses unknown source_id {source_id!r}.",
+                )
+            )
+            return "unknown"
+        return source_id
+
+    if default_source_id:
+        return default_source_id
+
+    warnings.append(
+        _warning(
+            "missing_evidence_source",
+            f"Evidence {context} has no source_id and no safe single-source fallback.",
+        )
+    )
+    return "unknown"
+
+
+def _warning(code: str, message: str) -> Warning:
+    return Warning(
+        id=f"warning-{code}",
+        code=code,
+        severity="warning",
+        message=message,
+    )
 
 
 def _map_relationship_notes(items: list[GeminiRelationNote]) -> list[Relationship]:

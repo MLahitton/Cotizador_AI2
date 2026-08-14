@@ -124,6 +124,7 @@ class GeminiElement(BaseModel):
     occurrences: list[GeminiOccurrence] = Field(default_factory=list)
     variants: list[GeminiVariant] = Field(default_factory=list)
     evidence: str | None = None
+    evidence_items: list[GeminiEvidence] = Field(default_factory=list)
     missing_or_unknown: list[str] = Field(default_factory=list)
     conflicts: list[str] = Field(default_factory=list)
     relationships: list[str] = Field(default_factory=list)
@@ -154,6 +155,9 @@ class GeminiEvidence(BaseModel):
     text: str | None = None
     visual_description: str | None = None
     location: str | None = None
+    page_number: int | None = None
+    sheet_name: str | None = None
+    cell_range: str | None = None
     status: ExtractionStatus | None = None
     confidence: float | None = None
     notes: str | None = None

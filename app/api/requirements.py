@@ -13,6 +13,7 @@ ALLOWED_UPLOAD_MIME_TYPES = {
     "application/pdf",
     "image/jpeg",
     "image/png",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
 
 router = APIRouter(prefix="/requirements", tags=["requirements"])
@@ -25,7 +26,13 @@ def get_gemini_extraction_provider() -> GeminiExtractionProvider:
 @router.post("/extract", response_model=RequirementExtraction)
 async def extract_requirement(
     provider: Annotated[GeminiExtractionProvider, Depends(get_gemini_extraction_provider)],
-    files: Annotated[list[UploadFile] | None, File(description="PDF/JPG/PNG files")] = None,
+    files: Annotated[
+        list[UploadFile],
+        File(
+            description="PDF/XLSX/JPG/PNG files",
+            json_schema_extra={"items": {"type": "string", "format": "binary"}},
+        ),
+    ] = None,
     project_id: Annotated[str | None, Form()] = None,
     requirement_id: Annotated[str | None, Form()] = None,
 ) -> RequirementExtraction:
@@ -39,13 +46,13 @@ async def extract_requirement(
             temp_paths.append(await _save_upload_file(upload, Path(temp_dir), index))
 
         try:
-            return provider.extract_from_files(
+            return provider.extract_with_discovery_from_files(
                 temp_paths,
                 project_id=project_id,
                 requirement_id=requirement_id,
             )
         except ValidationError as exc:
-            raise HTTPException(status_code=422, detail="Respuesta de IA invalida.") from exc
+            raise HTTPException(status_code=502, detail="Respuesta de IA invalida.") from exc
         except ValueError as exc:
             raise _http_error_from_value_error(exc) from exc
         except APIError as exc:
@@ -59,7 +66,7 @@ async def extract_requirement(
 def _validate_declared_content_types(files: list[UploadFile]) -> None:
     for upload in files:
         if upload.content_type and upload.content_type not in ALLOWED_UPLOAD_MIME_TYPES:
-            raise HTTPException(status_code=415, detail="Tipo de archivo no soportado.")
+            raise HTTPException(status_code=400, detail="Tipo de archivo no soportado.")
 
 
 async def _save_upload_file(upload: UploadFile, temp_dir: Path, index: int) -> Path:
@@ -91,8 +98,8 @@ def _safe_upload_file_name(file_name: str) -> str:
 def _http_error_from_value_error(exc: ValueError) -> HTTPException:
     message = str(exc)
     if "MIME type soportado" in message or "Tipo de archivo no soportado" in message:
-        return HTTPException(status_code=415, detail="Tipo de archivo no soportado.")
+        return HTTPException(status_code=400, detail="Tipo de archivo no soportado.")
     if "JSON invalido" in message or "texto JSON" in message:
-        return HTTPException(status_code=422, detail="Respuesta de IA invalida.")
+        return HTTPException(status_code=502, detail="Respuesta de IA invalida.")
 
     return HTTPException(status_code=400, detail="Solicitud invalida.")
