@@ -5,6 +5,7 @@ from app.models.common import ExtractionStatus
 from app.models.gemini_discovery import GeminiDiscoveryResult, GeminiElementDiscovery
 from app.models.gemini_enrichment import (
     GeminiElementEnrichment,
+    GeminiEnrichmentComponent,
     GeminiEnrichmentEvidenceNote,
     GeminiEnrichmentResult,
 )
@@ -567,3 +568,54 @@ def test_enrichment_to_gemini_extraction_preserves_context_as_structured_items()
     assert element.evidence_items[0].source_id == "source-1"
     assert element.evidence_items[0].page_number == 2
     assert element.evidence == "Nota: TODOS LOS VIDRIOS SON DE ESPESOR DE 6mm"
+
+
+def test_enrichment_to_gemini_extraction_preserves_structured_signals() -> None:
+    extraction = enrichment_to_gemini_extraction(
+        GeminiDiscoveryResult(),
+        GeminiEnrichmentResult(
+            elements=[
+                GeminiElementEnrichment(
+                    temporary_id="item-1",
+                    functional_type_raw="puerta corrediza",
+                    operation_raw="corrediza",
+                    panel_count=4,
+                    movable_panel_count=2,
+                    fixed_panel_count=2,
+                    modulation_raw="OXXO",
+                    opening_direction_raw="izquierda",
+                    special_features=["POCKET"],
+                    geometry_type_raw="estructura en L",
+                    geometry_raw="estructura en L",
+                    configuration_raw="puerta corrediza OXXO",
+                    components=[
+                        GeminiEnrichmentComponent(
+                            name="fijo inferior",
+                            type="panel",
+                            geometry_raw="rectangular",
+                            configuration_raw="fijo",
+                            finish_raw="negro",
+                            accessories=[],
+                        )
+                    ],
+                )
+            ]
+        ),
+    )
+    element = extraction.elements[0]
+    component = element.components[0]
+
+    assert element.functional_type == "puerta corrediza"
+    assert element.operation == "corrediza"
+    assert element.panel_count == 4
+    assert element.movable_panel_count == 2
+    assert element.fixed_panel_count == 2
+    assert element.modulation == "OXXO"
+    assert element.opening_direction == "izquierda"
+    assert element.special_features == ["POCKET"]
+    assert element.geometry_type == "estructura en L"
+    assert element.geometry == "estructura en L"
+    assert element.configuration == "puerta corrediza OXXO"
+    assert component.geometry == "rectangular"
+    assert component.configuration == "fijo"
+    assert component.finish == "negro"

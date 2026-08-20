@@ -708,3 +708,150 @@ def test_mapper_does_not_assign_ambiguous_multiple_evidences_to_measurements() -
         [],
         [],
     ]
+
+
+def test_mapper_structures_oxxo_modulation_counts_without_losing_raw() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="v-oxxo",
+                configuration="corrediza OXXO",
+                operation="corrediza",
+                modulation="OXXO",
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    configuration = result.elements[0].configuration
+
+    assert configuration is not None
+    assert configuration.raw_description == "corrediza OXXO"
+    assert configuration.modulation == "OXXO"
+    assert configuration.arrangement == "OXXO"
+    assert configuration.panel_count is not None
+    assert configuration.panel_count.value == 4
+    assert configuration.movable_panel_count is not None
+    assert configuration.movable_panel_count.value == 2
+    assert configuration.fixed_panel_count is not None
+    assert configuration.fixed_panel_count.value == 2
+    assert configuration.operation is not None
+    assert configuration.operation.normalized == "SLIDING"
+
+
+def test_mapper_structures_pocket_feature_and_preserves_raw_configuration() -> None:
+    raw = "XX PARA GUARDARSE EN UN BOLSILLO"
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="pocket",
+                configuration=raw,
+                modulation="XX",
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    configuration = result.elements[0].configuration
+
+    assert configuration is not None
+    assert configuration.raw_description == raw
+    assert configuration.modulation == "XX"
+    assert configuration.panel_count is not None
+    assert configuration.panel_count.value == 2
+    assert "POCKET" in configuration.special_features
+    assert result.elements[0].profiles == []
+
+
+def test_mapper_structures_projecting_with_lower_fixed_panel() -> None:
+    raw = "proyectante superior con fijo inferior"
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="projecting-fixed",
+                functional_type=raw,
+                operation=raw,
+                configuration=raw,
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+
+    assert element.functional_type is not None
+    assert element.functional_type.normalized == "PROJECTING"
+    assert element.configuration is not None
+    assert element.configuration.operation is not None
+    assert element.configuration.operation.normalized == "PROJECTING"
+    assert "ASSOCIATED_FIXED_PANEL" in element.configuration.special_features
+    assert "LOWER_FIXED_PANEL" in element.configuration.special_features
+
+
+def test_mapper_normalizes_l_shape_and_triangular_geometry() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(id="l", geometry="estructura en L", geometry_type="estructura en L"),
+            GeminiElement(id="tri", geometry="triangular", geometry_type="triangular"),
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert result.elements[0].geometry is not None
+    assert result.elements[0].geometry.normalized_type == "L_SHAPE"
+    assert result.elements[0].geometry.description == "estructura en L"
+    assert result.elements[1].geometry is not None
+    assert result.elements[1].geometry.normalized_type == "TRIANGULAR"
+    assert result.elements[1].geometry.description == "triangular"
+
+
+def test_mapper_structures_sliding_door_without_selecting_sg_system() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="door",
+                category="puerta corrediza",
+                functional_type="puerta corrediza",
+                operation="corrediza",
+                profiles=[GeminiNamedItem(code="3831", description="sistema solicitado")],
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+
+    assert element.functional_type is not None
+    assert element.functional_type.normalized == "SLIDING_DOOR"
+    assert element.configuration is not None
+    assert element.configuration.operation is not None
+    assert element.configuration.operation.normalized == "SLIDING"
+    assert element.profiles[0].code is not None
+    assert element.profiles[0].code.value == "3831"
+    assert element.profiles[0].name is None
+
+
+def test_mapper_does_not_invent_functional_type_for_ambiguous_sliding() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="ambiguous",
+                configuration="corrediza",
+                operation="corrediza",
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+
+    assert element.functional_type is None
+    assert element.configuration is not None
+    assert element.configuration.operation is not None
+    assert element.configuration.operation.normalized == "SLIDING"

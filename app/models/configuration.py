@@ -27,6 +27,7 @@ class Configuration(BaseModel):
     fixed_panel_count: TraceableValue | None = None
 
     arrangement: str | None = None
+    modulation: str | None = None
     opening_direction: NormalizedValue | None = None
 
     tracks: TraceableValue | None = None

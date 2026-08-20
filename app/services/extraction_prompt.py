@@ -145,9 +145,18 @@ Estructura JSON esperada:
     "category_raw": string|null,
     "description": string|null,
     "quantity": string|number|boolean|null,
+    "functional_type_raw": string|null,
+    "operation_raw": string|null,
+    "panel_count": number|null,
+    "movable_panel_count": number|null,
+    "fixed_panel_count": number|null,
+    "modulation_raw": string|null,
+    "opening_direction_raw": string|null,
+    "special_features": [string],
     "measurements": [{"type": string|null, "raw_label": string|null,
       "value": number|null, "unit": string|null, "text": string|null,
       "status": status|null, "confidence": number|null, "notes": string|null}],
+    "geometry_type_raw": string|null,
     "geometry_raw": string|null,
     "configuration_raw": string|null,
     "glass": [glass_item],
@@ -174,8 +183,9 @@ status: "explicit", "inferred", "ambiguous", "unknown", "not_applicable".
 named_item: name, type, code, role, description, quantity, status, confidence, notes.
 glass_item: type, thickness, thickness_value, thickness_unit, color, treatment,
 composition, description, status, confidence, notes.
-component_item: name, type, role, description, quantity, measurements, glass, materials,
-profiles, status, confidence, notes.
+component_item: name, type, role, description, quantity, measurements, geometry_raw,
+configuration_raw, glass, materials, profiles, finish_raw, accessories, status,
+confidence, notes.
 
 Instrucciones:
 - NO omitas ninguno de los discoveries recibidos.
@@ -198,6 +208,25 @@ Instrucciones:
 - Codigos explicitos como 7038, 1101, 3831, etc. deben conservarse cuando existan.
 - Preserva medidas, cantidad, nivel/ubicacion, configuracion, vidrio, espesores,
   materiales, perfiles, acabados, accesorios y componentes cuando existan.
+- Conserva configuration_raw completo aunque tambien extraigas senales estructuradas.
+- Extrae functional_type_raw cuando haya evidencia suficiente de la funcion global:
+  fijo, puerta corrediza, ventana corrediza, proyectante, batiente, doble batiente,
+  plegable, division de bano, baranda, pergola, rejilla, claraboya, fachada u otro.
+- Extrae operation_raw para el mecanismo de apertura: fijo, corredizo, proyectante,
+  batiente, doble batiente, plegable, pivote u otro.
+- Extrae panel_count, movable_panel_count, fixed_panel_count solo cuando haya evidencia.
+- Extrae modulation_raw cuando exista codigo compacto de naves/paneles como OXXO, XX,
+  OX, XO o similar. No inventes modulaciones ausentes.
+- Extrae opening_direction_raw solo si es explicita o visualmente clara.
+- Usa special_features para senales compactas como POCKET, ASSOCIATED_FIXED_PANEL,
+  LOWER_FIXED_PANEL, UPPER_FIXED_PANEL, MULLION, GRID, REINFORCED_CATCHES,
+  PRESERVE_MODULATION cuando exista evidencia.
+- Extrae geometry_type_raw cuando la forma principal sea rectangular, triangular,
+  trapezoidal, L, esquina, arco, curva, inclinada, irregular o unknown.
+- No conviertas codigos o sistemas comerciales solicitados en lineas internas S&G.
+- No elijas Fermo, Siena, Napoles, Lago, Monza, Monaco ni equivalentes internos.
+- Si texto y dibujo discrepan, conserva la discrepancia en notes/evidence_notes o
+  warnings; no resuelvas silenciosamente la contradiccion.
 - Las medidas pueden ser width, height, diameter, radius, length, depth, side_a,
   side_b o custom. Si la orientacion no es clara, no inventes width/height:
   conserva raw_label y el dato disponible.

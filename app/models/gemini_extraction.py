@@ -110,10 +110,19 @@ class GeminiElement(BaseModel):
     reference: str | None = None
     name: str | None = None
     category: str | None = None
+    functional_type: str | None = None
     description: str | None = None
     measurements: list[GeminiMeasurement] = Field(default_factory=list)
+    geometry_type: str | None = None
     geometry: str | None = None
+    operation: str | None = None
     configuration: str | None = None
+    panel_count: int | None = Field(default=None, ge=1)
+    movable_panel_count: int | None = Field(default=None, ge=0)
+    fixed_panel_count: int | None = Field(default=None, ge=0)
+    modulation: str | None = None
+    opening_direction: str | None = None
+    special_features: list[str] = Field(default_factory=list)
     quantity: str | int | float | None = None
     glass: list[GeminiGlass] = Field(default_factory=list)
     materials: list[GeminiNamedItem] = Field(default_factory=list)

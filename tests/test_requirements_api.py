@@ -6,9 +6,11 @@ from fastapi.testclient import TestClient
 
 from app.api.requirements import get_gemini_extraction_provider
 from app.main import app
-from app.models.common import ExtractionStatus, TraceableValue
+from app.models.common import ExtractionStatus, NormalizedValue, TraceableValue
+from app.models.configuration import Configuration
 from app.models.element import Element
 from app.models.evidence import Source
+from app.models.geometry import Geometry
 from app.models.requirement import ExtractionMetadata, Requirement
 from app.models.requirement_extraction import RequirementExtraction
 
@@ -50,6 +52,22 @@ class FakeExtractionProvider:
                     id="element-1",
                     reference=TraceableValue(
                         value="V1",
+                        status=ExtractionStatus.EXPLICIT,
+                    ),
+                    functional_type=NormalizedValue(
+                        normalized="SLIDING_DOOR",
+                        raw="puerta corrediza",
+                        status=ExtractionStatus.EXPLICIT,
+                    ),
+                    configuration=Configuration(
+                        raw_description="puerta corrediza OXXO",
+                        modulation="OXXO",
+                        status=ExtractionStatus.EXPLICIT,
+                    ),
+                    geometry=Geometry(
+                        normalized_type="L_SHAPE",
+                        raw_type="estructura en L",
+                        description="estructura en L",
                         status=ExtractionStatus.EXPLICIT,
                     ),
                 )
@@ -128,6 +146,9 @@ def test_extract_single_file_reaches_provider_and_serializes_result() -> None:
     assert len(provider.calls) == 1
     assert provider.calls[0]["existence_during_call"] == [True]
     assert response.json()["elements"][0]["reference"]["value"] == "V1"
+    assert response.json()["elements"][0]["functional_type"]["normalized"] == "SLIDING_DOOR"
+    assert response.json()["elements"][0]["configuration"]["modulation"] == "OXXO"
+    assert response.json()["elements"][0]["geometry"]["normalized_type"] == "L_SHAPE"
     assert response.json()["extraction_metadata"]["source_count"] == 1
 
 

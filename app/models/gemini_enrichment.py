@@ -58,9 +58,13 @@ class GeminiEnrichmentComponent(BaseModel):
     description: str | None = None
     quantity: str | int | float | None = None
     measurements: list[GeminiEnrichmentMeasurement] = Field(default_factory=list)
+    geometry_raw: str | None = None
+    configuration_raw: str | None = None
     glass: list[GeminiEnrichmentGlass] = Field(default_factory=list)
     materials: list[GeminiEnrichmentNamedItem] = Field(default_factory=list)
     profiles: list[GeminiEnrichmentNamedItem] = Field(default_factory=list)
+    finish_raw: str | None = None
+    accessories: list[GeminiEnrichmentNamedItem] = Field(default_factory=list)
     status: ExtractionStatus | None = None
     confidence: float | None = None
     notes: str | None = None
@@ -73,7 +77,16 @@ class GeminiElementEnrichment(BaseModel):
     category_raw: str | None = None
     description: str | None = None
     quantity: str | int | float | None = None
+    functional_type_raw: str | None = None
+    operation_raw: str | None = None
+    panel_count: int | None = Field(default=None, ge=1)
+    movable_panel_count: int | None = Field(default=None, ge=0)
+    fixed_panel_count: int | None = Field(default=None, ge=0)
+    modulation_raw: str | None = None
+    opening_direction_raw: str | None = None
+    special_features: list[str] = Field(default_factory=list)
     measurements: list[GeminiEnrichmentMeasurement] = Field(default_factory=list)
+    geometry_type_raw: str | None = None
     geometry_raw: str | None = None
     configuration_raw: str | None = None
     glass: list[GeminiEnrichmentGlass] = Field(default_factory=list)

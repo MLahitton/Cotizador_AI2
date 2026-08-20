@@ -1,3 +1,4 @@
+import re
 import unicodedata
 
 from app.models.common import ExtractionStatus, NormalizedValue, TraceableValue
@@ -251,6 +252,14 @@ def _map_element(
             "category",
             "categoria",
         ),
+        functional_type=_map_functional_type(
+            item.functional_type,
+            item.category,
+            item.configuration,
+            item.status,
+            item.confidence,
+            evidence_ids,
+        ),
         description=item.description,
         occurrences=[
             _map_occurrence(occurrence, occurrence_index, evidence_ids)
@@ -264,7 +273,13 @@ def _map_element(
             _map_component(component, component_index, evidence_ids)
             for component_index, component in enumerate(item.components, start=1)
         ],
-        geometry=_map_geometry(item.geometry, item.status, item.confidence, evidence_ids),
+        geometry=_map_geometry(
+            item.geometry,
+            item.geometry_type,
+            item.status,
+            item.confidence,
+            evidence_ids,
+        ),
         measurements=[
             _map_measurement(measurement, evidence_ids)
             for measurement in item.measurements
@@ -280,14 +295,21 @@ def _map_element(
         ),
         configuration=_map_configuration(
             item.configuration,
-            _optional_field_status(
+            operation=item.operation,
+            panel_count=item.panel_count,
+            movable_panel_count=item.movable_panel_count,
+            fixed_panel_count=item.fixed_panel_count,
+            modulation=item.modulation,
+            opening_direction=item.opening_direction,
+            special_features=item.special_features,
+            status=_optional_field_status(
                 item.configuration,
                 item.status,
                 missing_fields,
                 "configuration",
             ),
-            item.confidence,
-            evidence_ids,
+            confidence=item.confidence,
+            evidence_ids=evidence_ids,
         ),
         glass=[_map_glass(glass, evidence_ids) for glass in item.glass],
         materials=[_map_material(material, evidence_ids) for material in item.materials],
@@ -515,15 +537,23 @@ def _unique_ids(values: list[str]) -> list[str]:
 
 def _map_geometry(
     description: str | None,
+    geometry_type: str | None,
     status: ExtractionStatus | None,
     confidence: float | None,
     evidence_ids: list[str],
 ) -> Geometry | None:
-    if description in (None, "") and status is None and confidence is None:
+    if (
+        description in (None, "")
+        and geometry_type in (None, "")
+        and status is None
+        and confidence is None
+    ):
         return None
 
+    normalized_type = _normalize_geometry_type(geometry_type or description)
     return Geometry(
-        raw_type=description,
+        normalized_type=normalized_type,
+        raw_type=geometry_type or description,
         description=description,
         status=_status_for_value(description, status),
         confidence=confidence,
@@ -533,19 +563,346 @@ def _map_geometry(
 
 def _map_configuration(
     description: str | None,
+    *,
+    operation: str | None = None,
+    panel_count: int | None = None,
+    movable_panel_count: int | None = None,
+    fixed_panel_count: int | None = None,
+    modulation: str | None = None,
+    opening_direction: str | None = None,
+    special_features: list[str] | None = None,
     status: ExtractionStatus | None,
     confidence: float | None,
     evidence_ids: list[str],
 ) -> Configuration | None:
-    if description in (None, "") and status is None and confidence is None:
+    resolved_modulation = _normalize_modulation(modulation or description)
+    resolved_panel_count = panel_count or _panel_count_from_modulation(resolved_modulation)
+    normalized_features = _normalize_special_features(
+        [*(special_features or []), description or ""]
+    )
+    resolved_movable_panel_count = (
+        movable_panel_count
+        if movable_panel_count is not None
+        else _movable_count_from_modulation(resolved_modulation)
+    )
+    resolved_fixed_panel_count = (
+        fixed_panel_count
+        if fixed_panel_count is not None
+        else _fixed_count_from_modulation(resolved_modulation)
+    )
+    if description in (None, "") and not any(
+        [
+            operation,
+            resolved_panel_count,
+            movable_panel_count,
+            fixed_panel_count,
+            resolved_modulation,
+            opening_direction,
+            normalized_features,
+        ]
+    ) and status is None and confidence is None:
         return None
 
     return Configuration(
         raw_description=description,
+        operation=_normalized_signal(
+            operation or description,
+            _normalize_operation(operation or description),
+            status,
+            confidence,
+            evidence_ids,
+        ),
+        panel_count=_traceable(
+            resolved_panel_count,
+            status,
+            confidence,
+            evidence_ids,
+        ),
+        movable_panel_count=_traceable(
+            resolved_movable_panel_count,
+            status,
+            confidence,
+            evidence_ids,
+        ),
+        fixed_panel_count=_traceable(
+            resolved_fixed_panel_count,
+            status,
+            confidence,
+            evidence_ids,
+        ),
+        arrangement=resolved_modulation,
+        modulation=resolved_modulation,
+        opening_direction=_normalized_signal(
+            opening_direction,
+            _normalize_opening_direction(opening_direction),
+            status,
+            confidence,
+            evidence_ids,
+        ),
+        special_features=normalized_features,
         status=_status_for_value(description, status),
         confidence=confidence,
         evidence_ids=evidence_ids,
     )
+
+
+def _map_functional_type(
+    raw_functional_type: str | None,
+    category: str | None,
+    configuration: str | None,
+    status: ExtractionStatus | None,
+    confidence: float | None,
+    evidence_ids: list[str],
+) -> NormalizedValue | None:
+    raw = raw_functional_type or category
+    normalized = _normalize_functional_type(raw_functional_type, category, configuration)
+    if normalized is None and raw in (None, ""):
+        return None
+
+    return NormalizedValue(
+        normalized=normalized,
+        raw=raw,
+        status=_status_for_value(normalized or raw, status),
+        confidence=confidence,
+        evidence_ids=evidence_ids,
+    )
+
+
+def _normalized_signal(
+    raw: str | None,
+    normalized: str | None,
+    status: ExtractionStatus | None,
+    confidence: float | None,
+    evidence_ids: list[str],
+) -> NormalizedValue | None:
+    if raw in (None, "") and normalized is None:
+        return None
+
+    return NormalizedValue(
+        normalized=normalized,
+        raw=raw,
+        status=_status_for_value(normalized or raw, status),
+        confidence=confidence,
+        evidence_ids=evidence_ids,
+    )
+
+
+def _normalize_functional_type(
+    raw_functional_type: str | None,
+    category: str | None,
+    configuration: str | None,
+) -> str | None:
+    text = _compact_words(" ".join(item for item in [raw_functional_type, category] if item))
+    config_text = _compact_words(configuration or "")
+    combined = f"{text} {config_text}".strip()
+    if not combined:
+        return None
+
+    if "division" in combined and "bano" in combined:
+        return "BATHROOM_DIVISION"
+    if "baranda" in combined or "pasamanos" in combined:
+        return "RAILING"
+    if "pergola" in combined:
+        return "PERGOLA"
+    if "rejilla" in combined or "louver" in combined or "celosia" in combined:
+        return "LOUVER"
+    if "claraboya" in combined:
+        return "SKYLIGHT"
+    if "fachada" in combined:
+        return "FACADE"
+    if "proyectante" in combined:
+        return "PROJECTING"
+    if "doblebatiente" in combined or ("doble" in combined and "batiente" in combined):
+        return "DOUBLE_CASEMENT"
+    if "batiente" in combined:
+        return "CASEMENT"
+    if "fijo" in combined and not any(
+        term in combined for term in ("corred", "proyect", "batiente")
+    ):
+        return "FIXED"
+    if "plegable" in combined or "plegadiza" in combined:
+        if "puerta" in combined:
+            return "FOLDING_DOOR"
+        if "ventana" in combined:
+            return "FOLDING_WINDOW"
+        return None
+    if "corred" in combined or "sliding" in combined:
+        if "puerta" in combined:
+            return "SLIDING_DOOR"
+        if "ventana" in combined:
+            return "SLIDING_WINDOW"
+        return None
+    if raw_functional_type and "otro" in text:
+        return "OTHER"
+
+    return None
+
+
+def _normalize_operation(value: str | None) -> str | None:
+    text = _compact_words(value or "")
+    if not text:
+        return None
+    if "doblebatiente" in text or ("doble" in text and "batiente" in text):
+        return "DOUBLE_CASEMENT"
+    if "corred" in text or "sliding" in text:
+        return "SLIDING"
+    if "proyect" in text:
+        return "PROJECTING"
+    if "batiente" in text:
+        return "CASEMENT"
+    if "plegable" in text or "plegadiza" in text:
+        return "FOLDING"
+    if "pivot" in text or "pivote" in text:
+        return "PIVOT"
+    if "fijo" in text:
+        return "FIXED"
+    if "otro" in text:
+        return "OTHER"
+    return None
+
+
+def _normalize_geometry_type(value: str | None) -> str | None:
+    text = _compact_words(value or "")
+    if not text:
+        return None
+    if "triangular" in text or "triangulo" in text:
+        return "TRIANGULAR"
+    if "trapezo" in text:
+        return "TRAPEZOIDAL"
+    if "estructuraenl" in text or "formadel" in text or "lshape" in text:
+        return "L_SHAPE"
+    if "esquina" in text or "corner" in text or "escuadra" in text:
+        return "CORNER"
+    if "arco" in text or "arc" in text:
+        return "ARCH"
+    if "curv" in text:
+        return "CURVED"
+    if "inclin" in text or "sloped" in text or "pendiente" in text:
+        return "SLOPED"
+    if "irregular" in text:
+        return "IRREGULAR"
+    if "rectangular" in text or "rectangulo" in text:
+        return "RECTANGULAR"
+    if "unknown" in text or "desconoc" in text:
+        return "UNKNOWN"
+    return None
+
+
+def _normalize_opening_direction(value: str | None) -> str | None:
+    text = _compact_words(value or "")
+    if not text:
+        return None
+    if "izquierda" in text or text == "left":
+        return "LEFT"
+    if "derecha" in text or text == "right":
+        return "RIGHT"
+    if "arriba" in text or "superior" in text or text == "up":
+        return "UP"
+    if "abajo" in text or "inferior" in text or text == "down":
+        return "DOWN"
+    if "interior" in text or "haciaadentro" in text or "inward" in text:
+        return "INWARD"
+    if "exterior" in text or "haciaafuera" in text or "outward" in text:
+        return "OUTWARD"
+    return None
+
+
+def _normalize_special_features(values: list[str]) -> list[str]:
+    features: list[str] = []
+    text = _compact_words(" ".join(value for value in values if value))
+    explicit_values = {_normalize_feature_token(value) for value in values if value}
+    for feature in explicit_values:
+        if feature:
+            _append_unique(features, feature)
+
+    if any(
+        term in text
+        for term in (
+            "bolsillo",
+            "pocket",
+            "empotradaenmuro",
+            "guardarseenunbolsillo",
+            "dentrodelmuro",
+        )
+    ):
+        _append_unique(features, "POCKET")
+    if "fijo" in text and any(
+        term in text for term in ("asociado", "con", "inferior", "superior", "lateral")
+    ):
+        _append_unique(features, "ASSOCIATED_FIXED_PANEL")
+    if "fijoinferior" in text or ("fijo" in text and "inferior" in text):
+        _append_unique(features, "LOWER_FIXED_PANEL")
+    if "fijosuperior" in text or ("fijo" in text and "superior" in text):
+        _append_unique(features, "UPPER_FIXED_PANEL")
+    if "mullion" in text or "divisor" in text:
+        _append_unique(features, "MULLION")
+    if "reticula" in text or "cuadricula" in text or "grid" in text:
+        _append_unique(features, "GRID")
+    if "chapa" in text and "reforz" in text:
+        _append_unique(features, "REINFORCED_CATCHES")
+    if any(
+        term in text
+        for term in (
+            "conservarlasnaves",
+            "mantenerdisenodenaves",
+            "conservardisenodenaves",
+        )
+    ):
+        _append_unique(features, "PRESERVE_MODULATION")
+
+    return features
+
+
+def _normalize_feature_token(value: str) -> str | None:
+    text = value.strip().upper().replace(" ", "_").replace("-", "_")
+    allowed = {
+        "POCKET",
+        "ASSOCIATED_FIXED_PANEL",
+        "LOWER_FIXED_PANEL",
+        "UPPER_FIXED_PANEL",
+        "MULLION",
+        "GRID",
+        "REINFORCED_CATCHES",
+        "PRESERVE_MODULATION",
+    }
+    return text if text in allowed else None
+
+
+def _normalize_modulation(value: str | None) -> str | None:
+    if not value:
+        return None
+    match = re.search(r"\b[OX]{2,}\b", value.upper())
+    return match.group(0) if match else None
+
+
+def _panel_count_from_modulation(modulation: str | None) -> int | None:
+    return len(modulation) if modulation else None
+
+
+def _movable_count_from_modulation(modulation: str | None) -> int | None:
+    if not modulation or not _has_fixed_and_movable_symbols(modulation):
+        return None
+    return modulation.count("X")
+
+
+def _fixed_count_from_modulation(modulation: str | None) -> int | None:
+    if not modulation or not _has_fixed_and_movable_symbols(modulation):
+        return None
+    return modulation.count("O")
+
+
+def _has_fixed_and_movable_symbols(modulation: str) -> bool:
+    symbols = set(modulation)
+    return "O" in symbols and "X" in symbols
+
+
+def _compact_words(value: str) -> str:
+    return _compact_text(value).replace(".", "")
+
+
+def _append_unique(values: list[str], value: str) -> None:
+    if value not in values:
+        values.append(value)
 
 
 def _map_glass(item: GeminiGlass, evidence_ids: list[str]) -> GlassSpecification:
@@ -666,9 +1023,16 @@ def _map_variant(item: GeminiVariant, index: int, evidence_ids: list[str]) -> Va
         ],
         configuration=_map_configuration(
             item.configuration,
-            item.status,
-            item.confidence,
-            evidence_ids,
+            operation=None,
+            panel_count=None,
+            movable_panel_count=None,
+            fixed_panel_count=None,
+            modulation=None,
+            opening_direction=None,
+            special_features=[],
+            status=item.status,
+            confidence=item.confidence,
+            evidence_ids=evidence_ids,
         ),
         glass=[_map_glass(glass, evidence_ids) for glass in item.glass],
         materials=[_map_material(material, evidence_ids) for material in item.materials],
@@ -690,16 +1054,29 @@ def _map_component(item: GeminiComponent, index: int, evidence_ids: list[str]) -
         type=_normalized(item.type, item.status, item.confidence, evidence_ids),
         role=_normalized(item.role, item.status, item.confidence, evidence_ids),
         quantity=_traceable(item.quantity, item.status, item.confidence, evidence_ids),
-        geometry=_map_geometry(item.geometry, item.status, item.confidence, evidence_ids),
+        geometry=_map_geometry(
+            item.geometry,
+            None,
+            item.status,
+            item.confidence,
+            evidence_ids,
+        ),
         measurements=[
             _map_measurement(measurement, evidence_ids)
             for measurement in item.measurements
         ],
         configuration=_map_configuration(
             item.configuration,
-            item.status,
-            item.confidence,
-            evidence_ids,
+            operation=None,
+            panel_count=None,
+            movable_panel_count=None,
+            fixed_panel_count=None,
+            modulation=None,
+            opening_direction=None,
+            special_features=[],
+            status=item.status,
+            confidence=item.confidence,
+            evidence_ids=evidence_ids,
         ),
         glass=[_map_glass(glass, evidence_ids) for glass in item.glass],
         materials=[_map_material(material, evidence_ids) for material in item.materials],

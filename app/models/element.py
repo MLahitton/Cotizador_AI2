@@ -20,6 +20,7 @@ class Element(BaseModel):
     reference: TraceableValue | None = None
     name: TraceableValue | None = None
     category: NormalizedValue | None = None
+    functional_type: NormalizedValue | None = None
     description: str | None = None
 
     occurrences: list[Occurrence] = Field(default_factory=list)
