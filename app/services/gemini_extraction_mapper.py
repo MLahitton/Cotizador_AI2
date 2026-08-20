@@ -698,38 +698,40 @@ def _normalize_functional_type(
     if not combined:
         return None
 
-    if "division" in combined and "bano" in combined:
-        return "BATHROOM_DIVISION"
-    if "baranda" in combined or "pasamanos" in combined:
-        return "RAILING"
+    if ("division" in combined and ("bano" in combined or "ducha" in combined)) or (
+        "shower" in combined and "division" in combined
+    ):
+        return "SHOWER_DIVISION"
     if "pergola" in combined:
         return "PERGOLA"
-    if "rejilla" in combined or "louver" in combined or "celosia" in combined:
-        return "LOUVER"
-    if "claraboya" in combined:
+    if any(term in combined for term in ("rejilla", "louver", "celosia", "grille")):
+        return "GRILLE"
+    if "claraboya" in combined or "skylight" in combined:
         return "SKYLIGHT"
-    if "fachada" in combined:
-        return "FACADE"
-    if "proyectante" in combined:
+    if "proyectante" in combined or "projecting" in combined:
         return "PROJECTING"
+    if ("puerta" in combined or "door" in combined) and (
+        "batiente" in combined or "swing" in combined
+    ):
+        return "SWING_DOOR"
     if "doblebatiente" in combined or ("doble" in combined and "batiente" in combined):
         return "DOUBLE_CASEMENT"
-    if "batiente" in combined:
+    if "batiente" in combined or "casement" in combined:
         return "CASEMENT"
-    if "fijo" in combined and not any(
-        term in combined for term in ("corred", "proyect", "batiente")
+    if ("fijo" in combined or "fixed" in combined) and not any(
+        term in combined for term in ("corred", "proyect", "batiente", "sliding")
     ):
         return "FIXED"
-    if "plegable" in combined or "plegadiza" in combined:
-        if "puerta" in combined:
+    if "plegable" in combined or "plegadiza" in combined or "folding" in combined:
+        if "puerta" in combined or "door" in combined:
             return "FOLDING_DOOR"
-        if "ventana" in combined:
+        if "ventana" in combined or "window" in combined:
             return "FOLDING_WINDOW"
         return None
     if "corred" in combined or "sliding" in combined:
-        if "puerta" in combined:
+        if "puerta" in combined or "door" in combined:
             return "SLIDING_DOOR"
-        if "ventana" in combined:
+        if "ventana" in combined or "window" in combined:
             return "SLIDING_WINDOW"
         return None
     if raw_functional_type and "otro" in text:
@@ -971,11 +973,104 @@ def _map_finish(
         return None
 
     return FinishSpecification(
+        normalized_type=_normalize_finish_type(description),
+        color=_normalize_finish_color(description, status, confidence, evidence_ids),
+        texture=_normalize_finish_texture(description, status, confidence, evidence_ids),
+        code=_extract_finish_code(description, status, confidence, evidence_ids),
         raw_description=description,
         status=_status_for_value(description, status),
         confidence=confidence,
         evidence_ids=evidence_ids,
     )
+
+
+def _normalize_finish_type(value: str | None) -> str | None:
+    text = _compact_words(value or "")
+    if not text:
+        return None
+    if "inox" in text or "aceroinoxidable" in text or "stainlesssteel" in text:
+        return "STAINLESS_STEEL"
+    if "anodiz" in text:
+        return "ANODIZED"
+    if "pintura" in text or "pintado" in text or "alhorno" in text or "poliester" in text:
+        return "PAINTED"
+    return None
+
+
+def _normalize_finish_color(
+    value: str | None,
+    status: ExtractionStatus | None,
+    confidence: float | None,
+    evidence_ids: list[str],
+) -> NormalizedValue | None:
+    text = _compact_words(value or "")
+    color_map = {
+        "negro": "BLACK",
+        "black": "BLACK",
+        "blanco": "WHITE",
+        "white": "WHITE",
+        "gris": "GRAY",
+        "gray": "GRAY",
+        "grey": "GRAY",
+        "champana": "CHAMPAGNE",
+        "champagne": "CHAMPAGNE",
+    }
+    for token, normalized in color_map.items():
+        if token in text:
+            return NormalizedValue(
+                normalized=normalized,
+                raw=_raw_finish_token(value, token),
+                status=_status_for_value(value, status),
+                confidence=confidence,
+                evidence_ids=evidence_ids,
+            )
+    return None
+
+
+def _normalize_finish_texture(
+    value: str | None,
+    status: ExtractionStatus | None,
+    confidence: float | None,
+    evidence_ids: list[str],
+) -> NormalizedValue | None:
+    text = _compact_words(value or "")
+    if "mate" not in text and "matte" not in text:
+        return None
+    return NormalizedValue(
+        normalized="MATTE",
+        raw="mate",
+        status=_status_for_value(value, status),
+        confidence=confidence,
+        evidence_ids=evidence_ids,
+    )
+
+
+def _extract_finish_code(
+    value: str | None,
+    status: ExtractionStatus | None,
+    confidence: float | None,
+    evidence_ids: list[str],
+) -> TraceableValue | None:
+    if not value:
+        return None
+    match = re.search(r"\b(?:PP|AN)\d{2,4}\b", value.upper())
+    if match is None:
+        return None
+    return TraceableValue(
+        value=match.group(0),
+        status=_status_for_value(value, status),
+        confidence=confidence,
+        evidence_ids=evidence_ids,
+    )
+
+
+def _raw_finish_token(value: str | None, token: str) -> str:
+    if not value:
+        return token
+    for word in re.findall(r"\w+", value, flags=re.UNICODE):
+        if _compact_words(word) == token:
+            return word
+    return token
 
 
 def _map_accessory(item: GeminiNamedItem, evidence_ids: list[str]) -> AccessorySpecification:

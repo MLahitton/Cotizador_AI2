@@ -210,8 +210,11 @@ Instrucciones:
   materiales, perfiles, acabados, accesorios y componentes cuando existan.
 - Conserva configuration_raw completo aunque tambien extraigas senales estructuradas.
 - Extrae functional_type_raw cuando haya evidencia suficiente de la funcion global:
-  fijo, puerta corrediza, ventana corrediza, proyectante, batiente, doble batiente,
-  plegable, division de bano, baranda, pergola, rejilla, claraboya, fachada u otro.
+  fijo, puerta batiente, puerta corrediza, ventana corrediza, proyectante, batiente,
+  doble batiente, plegable, division de ducha/bano, pergola, rejilla, claraboya u otro.
+  El vocabulario final normalizado esperado por AI2/Backend incluye FIXED,
+  PROJECTING, CASEMENT, SWING_DOOR, SLIDING_WINDOW, SLIDING_DOOR, FOLDING_WINDOW,
+  FOLDING_DOOR, PERGOLA, SHOWER_DIVISION, GRILLE y SKYLIGHT.
 - Extrae operation_raw para el mecanismo de apertura: fijo, corredizo, proyectante,
   batiente, doble batiente, plegable, pivote u otro.
 - Extrae panel_count, movable_panel_count, fixed_panel_count solo cuando haya evidencia.
@@ -225,6 +228,11 @@ Instrucciones:
   trapezoidal, L, esquina, arco, curva, inclinada, irregular o unknown.
 - No conviertas codigos o sistemas comerciales solicitados en lineas internas S&G.
 - No elijas Fermo, Siena, Napoles, Lago, Monza, Monaco ni equivalentes internos.
+- Para acabados, conserva finish_raw completo y extrae cuando este explicito color,
+  tipo de acabado y codigo literal. No inventes codigos como PP13, PP003 o AN001 si
+  no aparecen literalmente en la fuente. Ejemplos de acabado a conservar/entender:
+  negro pintura al horno, blanco, gris, champana, anodizado blanco mate, inox o
+  acero inoxidable.
 - Si texto y dibujo discrepan, conserva la discrepancia en notes/evidence_notes o
   warnings; no resuelvas silenciosamente la contradiccion.
 - Las medidas pueden ser width, height, diameter, radius, length, depth, side_a,

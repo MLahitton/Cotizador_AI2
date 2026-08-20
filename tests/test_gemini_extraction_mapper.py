@@ -1,3 +1,5 @@
+import pytest
+
 from app.models.common import ExtractionStatus
 from app.models.gemini_extraction import (
     GeminiComponent,
@@ -855,3 +857,125 @@ def test_mapper_does_not_invent_functional_type_for_ambiguous_sliding() -> None:
     assert element.configuration is not None
     assert element.configuration.operation is not None
     assert element.configuration.operation.normalized == "SLIDING"
+
+
+@pytest.mark.parametrize(
+    ("raw_functional_type", "expected"),
+    [
+        ("fixed", "FIXED"),
+        ("proyectante", "PROJECTING"),
+        ("casement", "CASEMENT"),
+        ("puerta batiente", "SWING_DOOR"),
+        ("sliding window", "SLIDING_WINDOW"),
+        ("sliding door", "SLIDING_DOOR"),
+        ("folding window", "FOLDING_WINDOW"),
+        ("folding door", "FOLDING_DOOR"),
+        ("pergola", "PERGOLA"),
+        ("division de bano", "SHOWER_DIVISION"),
+        ("shower division", "SHOWER_DIVISION"),
+        ("rejilla", "GRILLE"),
+        ("louver", "GRILLE"),
+        ("claraboya", "SKYLIGHT"),
+    ],
+)
+def test_mapper_aligns_functional_type_vocabulary(
+    raw_functional_type: str,
+    expected: str,
+) -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="item",
+                functional_type=raw_functional_type,
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    functional_type = result.elements[0].functional_type
+
+    assert functional_type is not None
+    assert functional_type.raw == raw_functional_type
+    assert functional_type.normalized == expected
+    assert functional_type.status == ExtractionStatus.EXPLICIT
+
+
+def test_mapper_keeps_pocket_as_special_feature_not_commercial_family() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="pocket-door",
+                functional_type="puerta corrediza",
+                operation="corrediza",
+                configuration="XX PARA GUARDARSE EN UN BOLSILLO",
+                modulation="XX",
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+
+    assert element.functional_type is not None
+    assert element.functional_type.normalized == "SLIDING_DOOR"
+    assert element.configuration is not None
+    assert "POCKET" in element.configuration.special_features
+    assert element.profiles == []
+
+
+@pytest.mark.parametrize(
+    ("raw_finish", "finish_type", "color", "texture"),
+    [
+        ("negro pintura al horno", "PAINTED", "BLACK", None),
+        ("blanco", None, "WHITE", None),
+        ("gris", None, "GRAY", None),
+        ("champaña", None, "CHAMPAGNE", None),
+        ("anodizado blanco mate", "ANODIZED", "WHITE", "MATTE"),
+        ("acero inoxidable", "STAINLESS_STEEL", None, None),
+        ("inox", "STAINLESS_STEEL", None, None),
+    ],
+)
+def test_mapper_structures_finish_without_losing_raw_or_inventing_codes(
+    raw_finish: str,
+    finish_type: str | None,
+    color: str | None,
+    texture: str | None,
+) -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="finish",
+                finish=raw_finish,
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    finish = result.elements[0].finish
+
+    assert finish is not None
+    assert finish.raw_description == raw_finish
+    assert finish.normalized_type == finish_type
+    assert (finish.color.normalized if finish.color else None) == color
+    assert (finish.texture.normalized if finish.texture else None) == texture
+    assert finish.code is None
+
+
+def test_mapper_preserves_explicit_finish_code_without_inventing_catalog_code() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(id="without-code", finish="negro pintura al horno"),
+            GeminiElement(id="with-code", finish="negro pintura al horno PP13"),
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert result.elements[0].finish is not None
+    assert result.elements[0].finish.code is None
+    assert result.elements[1].finish is not None
+    assert result.elements[1].finish.code is not None
+    assert result.elements[1].finish.code.value == "PP13"
