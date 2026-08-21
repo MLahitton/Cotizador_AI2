@@ -1,4 +1,6 @@
+import logging
 import re
+import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +35,8 @@ from app.services.gemini_scope_pipeline import (
     scope_lookup,
     select_discoveries_for_enrichment,
 )
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_FILE_MIME_TYPES = {
     "application/pdf",
@@ -159,8 +163,18 @@ class GeminiExtractionProvider:
         if not files:
             raise ValueError("Debes proporcionar al menos un archivo para extraer.")
 
+        total_started = time.perf_counter()
+        file_load_started = time.perf_counter()
         with _RequirementFileContext(self, files) as context:
+            _log_perf(
+                requirement_id,
+                "FILE_LOAD",
+                _elapsed_ms(file_load_started),
+                file_count=len(context.paths),
+                file_names=",".join(path.name for path in context.paths),
+            )
             discovery_debug = GeminiDiscoveryDebugCapture()
+            discovery_started = time.perf_counter()
             discovery_response = self._generate_json(
                 _build_multifile_contents(
                     build_file_discovery_prompt(
@@ -171,10 +185,18 @@ class GeminiExtractionProvider:
                 )
             )
             discovery = _parse_gemini_discovery_response(discovery_response, discovery_debug)
+            _log_perf(
+                requirement_id,
+                "LLM_STRUCTURED_EXTRACTION",
+                _elapsed_ms(discovery_started),
+                substage="discovery",
+                element_count=len(discovery.elements),
+            )
             discovery_debug.model = self._provider.model
             discovery_debug.token_usage = _extract_token_usage(discovery_response)
 
             scope_debug = GeminiScopeDebugCapture()
+            scope_started = time.perf_counter()
             scope_response = self._generate_json(
                 _build_multifile_contents(
                     build_file_scope_prompt(
@@ -187,12 +209,20 @@ class GeminiExtractionProvider:
             )
             raw_scope = _parse_gemini_scope_response(scope_response, scope_debug)
             scope = merge_scope_with_discovery(discovery, raw_scope)
+            _log_perf(
+                requirement_id,
+                "LLM_STRUCTURED_EXTRACTION",
+                _elapsed_ms(scope_started),
+                substage="scope",
+                element_count=len(discovery.elements),
+            )
             scope_debug.scope_result = scope
             scope_debug.model = self._provider.model
             scope_debug.token_usage = _extract_token_usage(scope_response)
             scoped_discovery = select_discoveries_for_enrichment(discovery, scope)
 
             enrichment_debug = GeminiEnrichmentDebugCapture()
+            enrichment_started = time.perf_counter()
             enrichment = self._enrich_discovery_with_context(
                 context,
                 scoped_discovery,
@@ -200,6 +230,14 @@ class GeminiExtractionProvider:
                 debug_capture=enrichment_debug,
                 scope=scope,
             )
+            _log_perf(
+                requirement_id,
+                "LLM_STRUCTURED_EXTRACTION",
+                _elapsed_ms(enrichment_started),
+                substage="enrichment",
+                batch_count=len(enrichment_debug.batch_results or []),
+            )
+            postprocess_started = time.perf_counter()
             gemini_extraction = enrichment_to_gemini_extraction(scoped_discovery, enrichment)
             extraction = map_gemini_extraction_to_requirement_extraction(
                 gemini_extraction,
@@ -207,6 +245,12 @@ class GeminiExtractionProvider:
                 model=self._provider.model,
                 default_source_id=_default_evidence_source_id(context.file_specs),
                 allowed_source_ids=_source_ids(context.file_specs),
+            )
+            _log_perf(
+                requirement_id,
+                "POSTPROCESS",
+                _elapsed_ms(postprocess_started),
+                element_count=len(extraction.elements),
             )
             extraction.requirement.project_id = project_id
             extraction.requirement.requirement_id = requirement_id
@@ -230,6 +274,13 @@ class GeminiExtractionProvider:
                 debug_capture.batch_size = enrichment_debug.batch_size
                 debug_capture.batch_count = len(enrichment_debug.batch_results or [])
 
+            _log_perf(
+                requirement_id,
+                "TOTAL_AI2_EXTRACTION",
+                _elapsed_ms(total_started),
+                element_count=len(extraction.elements),
+                warning_count=len(extraction.warnings),
+            )
             return extraction
 
     def extract_from_files(
@@ -552,6 +603,26 @@ def _resolve_batch_size(batch_size: int | None, default_batch_size: int) -> int:
     if resolved <= 0:
         raise ValueError("batch_size debe ser mayor que cero.")
     return resolved
+
+
+def _elapsed_ms(started: float) -> int:
+    return int((time.perf_counter() - started) * 1000)
+
+
+def _log_perf(
+    requirement_id: str | None,
+    stage: str,
+    elapsed_ms: int,
+    **fields: object,
+) -> None:
+    details = " ".join(f"{key}={value}" for key, value in fields.items())
+    logger.info(
+        "[NEWPIPE-PERF] RequirementId=%s Stage=%s ElapsedMs=%s %s",
+        requirement_id,
+        stage,
+        elapsed_ms,
+        details,
+    )
 
 
 def _warnings_from_messages(messages: list[str]):

@@ -1,4 +1,4 @@
-from decimal import Decimal
+﻿from decimal import Decimal
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -10,6 +10,11 @@ class SimilarityLevel(StrEnum):
     MEDIUM = "MEDIUM"
     LOW = "LOW"
     REJECTED = "REJECTED"
+
+
+class SimilarityBatchResultStatus(StrEnum):
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
 
 
 class SimilarityElementInput(BaseModel):
@@ -71,3 +76,25 @@ class SimilarityEvaluationResult(BaseModel):
     candidates: list[SimilarityCandidateResult] = Field(default_factory=list)
     overall_notes: list[str] = Field(default_factory=list)
     evaluation_source: str = "AI2_SIMILARITY"
+
+
+class SimilarityBatchRequestItem(BaseModel):
+    request_id: str
+    element: SimilarityElementInput
+    candidates: list[SimilarityHistoricalCandidateInput] = Field(min_length=1)
+
+
+class SimilarityBatchEvaluationRequest(BaseModel):
+    requests: list[SimilarityBatchRequestItem] = Field(min_length=1)
+
+
+class SimilarityBatchResultItem(BaseModel):
+    request_id: str
+    status: SimilarityBatchResultStatus = SimilarityBatchResultStatus.COMPLETED
+    candidates: list[SimilarityCandidateResult] = Field(default_factory=list)
+    failure_code: str | None = None
+
+
+class SimilarityBatchEvaluationResult(BaseModel):
+    results: list[SimilarityBatchResultItem] = Field(default_factory=list)
+    evaluation_source: str = "AI2_SIMILARITY_BATCH"
