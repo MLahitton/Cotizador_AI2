@@ -280,6 +280,11 @@ def _map_element(
             item.confidence,
             evidence_ids,
         ),
+        assembly_type=_normalize_assembly_type(
+            item.assembly_type,
+            item.geometry_type,
+            item.components,
+        ),
         measurements=[
             _map_measurement(measurement, evidence_ids)
             for measurement in item.measurements
@@ -685,6 +690,63 @@ def _normalized_signal(
         confidence=confidence,
         evidence_ids=evidence_ids,
     )
+
+
+def _normalized_component_role(
+    raw: str | None,
+    status: ExtractionStatus | None,
+    confidence: float | None,
+    evidence_ids: list[str],
+) -> NormalizedValue | None:
+    return _normalized_signal(
+        raw,
+        _normalize_component_role(raw),
+        status,
+        confidence,
+        evidence_ids,
+    )
+
+
+def _normalize_component_role(value: str | None) -> str | None:
+    normalized = _compact_words(value or "").upper()
+    canonical_roles = {
+        "FIXED",
+        "PROJECTING",
+        "SLIDING",
+        "SWING",
+        "LEG",
+        "PANEL",
+        "UNKNOWN",
+    }
+    return normalized if normalized in canonical_roles else None
+
+
+
+def _normalize_assembly_type(
+    value: str | None,
+    geometry_type: str | None,
+    components: list[GeminiComponent],
+) -> str | None:
+    text = _compact_words(value or "")
+    if text:
+        if any(term in text for term in ("corner", "esquina", "escuadra")):
+            return "CORNER"
+        if any(term in text for term in ("composite", "compuesto", "mixto", "associatedfixed")):
+            return "COMPOSITE"
+        if any(term in text for term in ("multimodule", "modulos", "modules", "segmentos")):
+            return "MULTI_MODULE"
+        if any(term in text for term in ("single", "simple")):
+            return "SINGLE"
+
+    geometry = _normalize_geometry_type(geometry_type)
+    if geometry == "CORNER":
+        return "CORNER"
+    roles = {_compact_words(component.role or component.type or "") for component in components}
+    if roles and any("project" in role or "proyect" in role for role in roles) and any(
+        "fixed" in role or "fijo" in role for role in roles
+    ):
+        return "COMPOSITE"
+    return "MULTI_MODULE" if len(components) > 1 else None
 
 
 def _normalize_functional_type(
@@ -1147,7 +1209,7 @@ def _map_component(item: GeminiComponent, index: int, evidence_ids: list[str]) -
         id=item.id or f"component-{index}",
         name=_traceable(item.name, item.status, item.confidence, evidence_ids),
         type=_normalized(item.type, item.status, item.confidence, evidence_ids),
-        role=_normalized(item.role, item.status, item.confidence, evidence_ids),
+        role=_normalized_component_role(item.role, item.status, item.confidence, evidence_ids),
         quantity=_traceable(item.quantity, item.status, item.confidence, evidence_ids),
         geometry=_map_geometry(
             item.geometry,

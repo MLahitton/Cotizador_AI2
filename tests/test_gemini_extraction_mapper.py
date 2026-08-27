@@ -979,3 +979,143 @@ def test_mapper_preserves_explicit_finish_code_without_inventing_catalog_code() 
     assert result.elements[1].finish is not None
     assert result.elements[1].finish.code is not None
     assert result.elements[1].finish.code.value == "PP13"
+
+
+def test_mapper_preserves_assembly_type_and_component_segments() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="corner-window",
+                reference="V-25",
+                category="ventana fija",
+                geometry_type="esquina",
+                assembly_type="corner",
+                quantity=1,
+                components=[
+                    GeminiComponent(
+                        role="FIXED",
+                        quantity=1,
+                        measurements=[
+                            GeminiMeasurement(type="width", value=1.79, unit="m"),
+                            GeminiMeasurement(type="height", value=2.8, unit="m"),
+                        ],
+                        geometry="rectangular",
+                    ),
+                    GeminiComponent(
+                        role="FIXED",
+                        quantity=1,
+                        measurements=[
+                            GeminiMeasurement(type="width", value=2.33, unit="m"),
+                            GeminiMeasurement(type="height", value=2.8, unit="m"),
+                        ],
+                        geometry="rectangular",
+                    ),
+                ],
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+
+    assert element.assembly_type == "CORNER"
+    assert len(element.components) == 2
+    assert element.quantity is not None
+    assert element.quantity.value == 1
+    assert element.components[0].role is not None
+    assert element.components[0].role.normalized == "FIXED"
+    assert element.components[0].measurements[0].value == 1.79
+    assert element.components[1].measurements[0].value == 2.33
+
+
+def test_mapper_normalizes_known_component_roles_and_preserves_unknown_raw() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="roles",
+                components=[
+                    GeminiComponent(role=" PROJECTING ", status=ExtractionStatus.EXPLICIT),
+                    GeminiComponent(role="fixed", status=ExtractionStatus.INFERRED),
+                    GeminiComponent(role="custom bracket", status=ExtractionStatus.EXPLICIT),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    roles = [component.role for component in result.elements[0].components]
+
+    assert roles[0] is not None
+    assert roles[0].raw == " PROJECTING "
+    assert roles[0].normalized == "PROJECTING"
+    assert roles[0].status == ExtractionStatus.EXPLICIT
+    assert roles[1] is not None
+    assert roles[1].raw == "fixed"
+    assert roles[1].normalized == "FIXED"
+    assert roles[1].status == ExtractionStatus.INFERRED
+    assert roles[2] is not None
+    assert roles[2].raw == "custom bracket"
+    assert roles[2].normalized is None
+
+
+def test_mapper_infers_composite_assembly_from_projecting_and_fixed_components() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="projecting-with-fixed",
+                reference="V-01",
+                category="ventana proyectante con fijo",
+                components=[
+                    GeminiComponent(role="PROJECTING", quantity=1),
+                    GeminiComponent(role="FIXED", quantity=1),
+                ],
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert result.elements[0].assembly_type == "COMPOSITE"
+
+
+def test_mapper_preserves_same_reference_as_distinct_elements() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(id="v-01-a", reference="V-01", description="Nivel 1"),
+            GeminiElement(id="v-01-b", reference="V-01", description="Nivel 2"),
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert [element.id for element in result.elements] == ["v-01-a", "v-01-b"]
+    assert [element.reference.value for element in result.elements if element.reference] == [
+        "V-01",
+        "V-01",
+    ]
+
+
+def test_mapper_preserves_incomplete_reference_with_reviewable_unknowns() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="partial-window",
+                reference="V-99",
+                category="ventana",
+                measurements=[GeminiMeasurement(type="width", value=0.6, unit="m")],
+                missing_or_unknown=["height", "glass"],
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+
+    assert element.id == "partial-window"
+    assert element.reference is not None
+    assert element.reference.value == "V-99"
+    assert element.measurements[0].value == 0.6
+    assert element.missing_fields == ["height", "glass"]

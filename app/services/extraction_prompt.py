@@ -238,6 +238,11 @@ Instrucciones:
 - Las medidas pueden ser width, height, diameter, radius, length, depth, side_a,
   side_b o custom. Si la orientacion no es clara, no inventes width/height:
   conserva raw_label y el dato disponible.
+- Extrae assembly_type cuando el item comercial tenga estructura interna clara: SINGLE, MULTI_MODULE, COMPOSITE o CORNER.
+- Para MULTI_MODULE, COMPOSITE o CORNER, preserva cada submodulo/tramo/pano en components con role, measurements, quantity y geometry_raw cuando existan.
+- No conviertas automaticamente cada submodulo en un element independiente si pertenece a la misma referencia comercial.
+- Si la misma referencia aparece en niveles/contextos distintos, manten elementos separados y usa occurrence_context/evidence para distinguirlos.
+- Quantity representa cantidad comercial, no cantidad de components, paneles o tramos.
 - Mantener componentes simples. No uses recursividad.
 - No pierdas elementos incompletos.
 - Excluye espejos.

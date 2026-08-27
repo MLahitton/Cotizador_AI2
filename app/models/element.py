@@ -28,6 +28,7 @@ class Element(BaseModel):
     components: list[Component] = Field(default_factory=list)
 
     geometry: Geometry | None = None
+    assembly_type: str | None = None
     measurements: list[Measurement] = Field(default_factory=list)
 
     quantity: TraceableValue | None = None

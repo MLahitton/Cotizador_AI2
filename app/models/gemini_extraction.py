@@ -93,6 +93,7 @@ class GeminiComponent(BaseModel):
     description: str | None = None
     measurements: list[GeminiMeasurement] = Field(default_factory=list)
     geometry: str | None = None
+    assembly_type: str | None = None
     configuration: str | None = None
     glass: list[GeminiGlass] = Field(default_factory=list)
     materials: list[GeminiNamedItem] = Field(default_factory=list)
@@ -115,6 +116,7 @@ class GeminiElement(BaseModel):
     measurements: list[GeminiMeasurement] = Field(default_factory=list)
     geometry_type: str | None = None
     geometry: str | None = None
+    assembly_type: str | None = None
     operation: str | None = None
     configuration: str | None = None
     panel_count: int | None = Field(default=None, ge=1)
