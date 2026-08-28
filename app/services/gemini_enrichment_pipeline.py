@@ -20,6 +20,7 @@ from app.models.gemini_extraction import (
     GeminiVariant,
 )
 from app.models.requirement import TokenUsage
+from app.services.inventory_reconciliation import reconcile_inventory_candidates
 
 
 def build_discovery_batches(
@@ -94,14 +95,15 @@ def enrichment_to_gemini_extraction(
     discovery: GeminiDiscoveryResult,
     enrichment: GeminiEnrichmentResult,
 ) -> GeminiExtraction:
+    reconciled, _ = reconcile_inventory_candidates(enrichment)
     elements = [
         _enriched_to_gemini_element(item, index)
-        for index, item in enumerate(enrichment.elements, start=1)
+        for index, item in enumerate(reconciled.elements, start=1)
     ]
     return GeminiExtraction(
         elements=elements,
         unknown_fields=[],
-        notes="\n".join(discovery.notes + enrichment.warnings) or None,
+        notes="\n".join(discovery.notes + reconciled.warnings) or None,
     )
 
 

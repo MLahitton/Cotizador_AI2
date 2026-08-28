@@ -1,8 +1,9 @@
 import logging
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated, Callable
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from google.genai.errors import APIError

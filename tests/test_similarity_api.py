@@ -67,7 +67,11 @@ def test_similarity_evaluate_multiple_candidates_returns_200() -> None:
 
 
 def test_similarity_evaluate_empty_candidates_returns_controlled_error() -> None:
-    response = _post_with_fake(_FakeSimilarityEvaluator(), "/similarity/evaluate", _request_payload(candidates=[]))
+    response = _post_with_fake(
+        _FakeSimilarityEvaluator(),
+        "/similarity/evaluate",
+        _request_payload(candidates=[]),
+    )
 
     assert response.status_code == 422
 
@@ -120,7 +124,11 @@ def test_similarity_evaluate_batch_valid_request_returns_200_without_mixing_cand
 
 
 def test_similarity_evaluate_batch_empty_requests_returns_controlled_error() -> None:
-    response = _post_with_fake(_FakeSimilarityEvaluator(), "/similarity/evaluate-batch", {"requests": []})
+    response = _post_with_fake(
+        _FakeSimilarityEvaluator(),
+        "/similarity/evaluate-batch",
+        {"requests": []},
+    )
 
     assert response.status_code == 422
 
@@ -191,7 +199,9 @@ def test_similarity_openapi_exposes_response_schema() -> None:
     response_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
     assert response_schema["$ref"].endswith("/SimilarityEvaluationResult")
     assert "application/json" in batch_operation["requestBody"]["content"]
-    batch_response_schema = batch_operation["responses"]["200"]["content"]["application/json"]["schema"]
+    batch_response_schema = batch_operation["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]
     assert batch_response_schema["$ref"].endswith("/SimilarityBatchEvaluationResult")
 
 

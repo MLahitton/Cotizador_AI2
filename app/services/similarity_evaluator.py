@@ -17,7 +17,6 @@ from app.services.similarity_prompt import (
     build_similarity_prompt,
 )
 
-
 logger = logging.getLogger(__name__)
 
 

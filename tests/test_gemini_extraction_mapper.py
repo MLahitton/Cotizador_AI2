@@ -10,6 +10,7 @@ from app.models.gemini_extraction import (
     GeminiMeasurement,
     GeminiNamedItem,
     GeminiOccurrence,
+    GeminiRelationNote,
     GeminiRequirementInfo,
     GeminiVariant,
 )
@@ -1037,6 +1038,10 @@ def test_mapper_normalizes_known_component_roles_and_preserves_unknown_raw() -> 
                 components=[
                     GeminiComponent(role=" PROJECTING ", status=ExtractionStatus.EXPLICIT),
                     GeminiComponent(role="fixed", status=ExtractionStatus.INFERRED),
+                    GeminiComponent(role="casement", status=ExtractionStatus.EXPLICIT),
+                    GeminiComponent(role="folding", status=ExtractionStatus.EXPLICIT),
+                    GeminiComponent(role="grille", status=ExtractionStatus.EXPLICIT),
+                    GeminiComponent(role="louver", status=ExtractionStatus.EXPLICIT),
                     GeminiComponent(role="custom bracket", status=ExtractionStatus.EXPLICIT),
                 ],
             )
@@ -1055,8 +1060,16 @@ def test_mapper_normalizes_known_component_roles_and_preserves_unknown_raw() -> 
     assert roles[1].normalized == "FIXED"
     assert roles[1].status == ExtractionStatus.INFERRED
     assert roles[2] is not None
-    assert roles[2].raw == "custom bracket"
-    assert roles[2].normalized is None
+    assert roles[2].normalized == "CASEMENT"
+    assert roles[3] is not None
+    assert roles[3].normalized == "FOLDING"
+    assert roles[4] is not None
+    assert roles[4].normalized == "GRILLE"
+    assert roles[5] is not None
+    assert roles[5].normalized == "LOUVER"
+    assert roles[6] is not None
+    assert roles[6].raw == "custom bracket"
+    assert roles[6].normalized is None
 
 
 def test_mapper_infers_composite_assembly_from_projecting_and_fixed_components() -> None:
@@ -1080,6 +1093,144 @@ def test_mapper_infers_composite_assembly_from_projecting_and_fixed_components()
     assert result.elements[0].assembly_type == "COMPOSITE"
 
 
+@pytest.mark.parametrize(
+    ("components", "expected_roles"),
+    [
+        (["SLIDING", "GRILLE"], ["SLIDING", "GRILLE"]),
+        (["PROJECTING", "FIXED"], ["PROJECTING", "FIXED"]),
+        (["SWING", "FIXED"], ["SWING", "FIXED"]),
+        (["SLIDING", "FIXED"], ["SLIDING", "FIXED"]),
+    ],
+)
+def test_mapper_preserves_composite_functional_components(
+    components: list[str],
+    expected_roles: list[str],
+) -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="composite-item",
+                category="ventana",
+                components=[
+                    GeminiComponent(role=role, quantity=1)
+                    for role in components
+                ],
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+
+    assert element.assembly_type == "COMPOSITE"
+    assert [
+        component.role.normalized
+        for component in element.components
+        if component.role is not None
+    ] == expected_roles
+
+
+def test_mapper_preserves_grille_only_without_artificial_mobile_component() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="grille-only",
+                category="rejilla",
+                components=[GeminiComponent(role="GRILLE", quantity=1)],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+
+    assert element.assembly_type is None
+    assert len(element.components) == 1
+    assert element.components[0].role is not None
+    assert element.components[0].role.normalized == "GRILLE"
+
+
+def test_mapper_preserves_two_fixed_components_with_distinct_geometry() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="two-fixed-panels",
+                category="ventana fija",
+                components=[
+                    GeminiComponent(
+                        role="FIXED",
+                        measurements=[GeminiMeasurement(type="width", value=1.2, unit="m")],
+                        geometry="left panel",
+                    ),
+                    GeminiComponent(
+                        role="FIXED",
+                        measurements=[GeminiMeasurement(type="width", value=1.8, unit="m")],
+                        geometry="right panel",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+
+    assert element.assembly_type == "MULTI_MODULE"
+    assert len(element.components) == 2
+    assert [component.measurements[0].value for component in element.components] == [1.2, 1.8]
+
+
+def test_mapper_derives_components_from_explicit_sliding_and_grille_signals() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="sliding-grille-flat",
+                category="ventana",
+                functional_type="rejilla",
+                operation="corrediza",
+                description="Ventana de dos hojas corredizas con rejilla asociada",
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    roles = [
+        component.role.normalized
+        for component in result.elements[0].components
+        if component.role is not None
+    ]
+
+    assert result.elements[0].assembly_type == "COMPOSITE"
+    assert roles == ["GRILLE", "SLIDING"]
+
+
+def test_mapper_derives_projecting_and_fixed_components_from_item_signals() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="projecting-fixed-flat",
+                category="ventana proyectante",
+                functional_type="proyectante",
+                configuration="con pano fijo inferior",
+                special_features=["LOWER_FIXED_PANEL"],
+                description="Ventana proyectante con pano fijo inferior",
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    roles = [
+        component.role.normalized
+        for component in result.elements[0].components
+        if component.role is not None
+    ]
+
+    assert result.elements[0].assembly_type == "COMPOSITE"
+    assert roles == ["PROJECTING", "FIXED"]
+
+
 def test_mapper_preserves_same_reference_as_distinct_elements() -> None:
     extraction = GeminiExtraction(
         elements=[
@@ -1096,6 +1247,145 @@ def test_mapper_preserves_same_reference_as_distinct_elements() -> None:
         "V-01",
     ]
 
+
+def test_mapper_derives_swing_and_fixed_components_from_item_signals() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="swing-fixed-flat",
+                reference="P-01",
+                category="puerta batiente",
+                functional_type="puerta batiente",
+                description="Puerta batiente de una hoja con pano fijo lateral",
+                quantity=4,
+                status=ExtractionStatus.EXPLICIT,
+                confidence=0.78,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+    roles = [
+        component.role.normalized
+        for component in element.components
+        if component.role is not None
+    ]
+
+    assert len(result.elements) == 1
+    assert element.assembly_type == "COMPOSITE"
+    assert roles == ["SWING", "FIXED"]
+    assert element.quantity is not None
+    assert element.quantity.value == 4
+
+
+def test_mapper_preserves_fixed_only_without_artificial_mobile_component() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="fixed-only",
+                category="ventana fija",
+                functional_type="fijo",
+                description="Ventana fija en un solo pano",
+                panel_count=2,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+    roles = [
+        component.role.normalized
+        for component in element.components
+        if component.role is not None
+    ]
+
+    assert roles == ["FIXED"]
+    assert element.assembly_type is None
+
+
+def test_mapper_preserves_swing_only_without_artificial_fixed_component() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="swing-only",
+                category="puerta batiente",
+                functional_type="puerta batiente",
+                description="Puerta batiente de una hoja",
+                panel_count=2,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+    roles = [
+        component.role.normalized
+        for component in element.components
+        if component.role is not None
+    ]
+
+    assert roles == ["SWING"]
+    assert element.assembly_type is None
+
+
+def test_mapper_preserves_conflicting_text_and_structure_as_reviewable_evidence() -> None:
+    extraction = GeminiExtraction(
+        evidence=[
+            GeminiEvidence(id="ev-text", text="Texto: puerta batiente"),
+            GeminiEvidence(id="ev-drawing", visual_description="Dibujo: pano fijo lateral"),
+        ],
+        elements=[
+            GeminiElement(
+                id="conflicting-assembly",
+                reference="P-02",
+                category="puerta",
+                functional_type="puerta batiente",
+                description="Puerta batiente con dibujo de pano fijo lateral",
+                components=[
+                    GeminiComponent(
+                        role="SWING",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.82,
+                        evidence="Texto especifica hoja batiente.",
+                    ),
+                    GeminiComponent(
+                        role="FIXED",
+                        status=ExtractionStatus.AMBIGUOUS,
+                        confidence=0.45,
+                        evidence="Dibujo sugiere pano fijo lateral.",
+                    ),
+                ],
+                conflicts=["Texto y dibujo no coinciden sobre el fijo lateral"],
+                status=ExtractionStatus.AMBIGUOUS,
+                confidence=0.52,
+            )
+        ],
+        conflicts=[
+            GeminiRelationNote(
+                description="Texto y dibujo no coinciden sobre el fijo lateral",
+                type="functional_structure_conflict",
+                status=ExtractionStatus.AMBIGUOUS,
+                confidence=0.52,
+            )
+        ],
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+    roles = [
+        component.role.normalized
+        for component in element.components
+        if component.role is not None
+    ]
+
+    assert element.assembly_type == "COMPOSITE"
+    assert roles == ["SWING", "FIXED"]
+    assert element.confidence == 0.52
+    assert element.components[1].role is not None
+    assert element.components[1].role.status == ExtractionStatus.AMBIGUOUS
+    assert element.components[1].confidence == 0.45
+    assert result.conflicts[0].field == "functional_structure_conflict"
 
 def test_mapper_preserves_incomplete_reference_with_reviewable_unknowns() -> None:
     extraction = GeminiExtraction(

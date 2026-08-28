@@ -7,6 +7,7 @@ from app.models.gemini_enrichment import (
     GeminiElementEnrichment,
     GeminiEnrichmentComponent,
     GeminiEnrichmentEvidenceNote,
+    GeminiEnrichmentMeasurement,
     GeminiEnrichmentResult,
 )
 from app.models.requirement import ExtractionMetadata, Requirement, TokenUsage
@@ -21,6 +22,12 @@ from app.services.gemini_enrichment_pipeline import (
     build_discovery_batches,
     enrichment_to_gemini_extraction,
     merge_enrichment_batches,
+)
+from app.services.inventory_reconciliation import (
+    DUPLICATE_REFERENCE_REASON,
+    ORPHAN_REFERENCE_REASON,
+    SOURCE_CONFLICT_REASON,
+    reconcile_inventory_candidates,
 )
 
 
@@ -110,7 +117,7 @@ def _discovery(count: int) -> GeminiDiscoveryResult:
 
 def _enrichment_response(*temporary_ids: str, usage: tuple[int, int, int] | None = None):
     elements = ", ".join(
-        f'{{"temporary_id": "{temporary_id}", "reference": "{temporary_id}"}}'
+        f'{{"temporary_id": "{temporary_id}", "reference": "{temporary_id}", "quantity": 1}}'
         for temporary_id in temporary_ids
     )
     usage_metadata = _UsageMetadata(*usage) if usage else None
@@ -619,3 +626,131 @@ def test_enrichment_to_gemini_extraction_preserves_structured_signals() -> None:
     assert component.geometry == "rectangular"
     assert component.configuration == "fijo"
     assert component.finish == "negro"
+
+
+
+def test_inventory_reconciliation_ignores_orphan_reference_tag() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[GeminiElementEnrichment(temporary_id="tag", reference="PV-07")]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+
+    assert result.elements == []
+    assert decisions[0].action == "DROP_AS_NON_COMMERCIAL"
+    assert decisions[0].reason == ORPHAN_REFERENCE_REASON
+    assert any(ORPHAN_REFERENCE_REASON in warning for warning in result.warnings)
+
+
+def test_inventory_reconciliation_keeps_table_row_with_dimensions_and_quantity() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="row",
+                reference="V-01",
+                quantity=2,
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=1000, unit="mm"),
+                    GeminiEnrichmentMeasurement(type="height", value=2000, unit="mm"),
+                ],
+            )
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+
+    assert [item.temporary_id for item in result.elements] == ["row"]
+    assert decisions[0].action == "KEEP"
+
+
+def test_inventory_reconciliation_keeps_drawing_with_geometry_and_operation() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="drawing",
+                reference="V-02",
+                operation_raw="corrediza",
+                geometry_type_raw="rectangular",
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=1200, unit="mm"),
+                    GeminiEnrichmentMeasurement(type="height", value=1800, unit="mm"),
+                ],
+            )
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+
+    assert [item.temporary_id for item in result.elements] == ["drawing"]
+    assert decisions[0].action == "KEEP"
+
+
+def test_inventory_reconciliation_merges_canonical_duplicate_references() -> None:
+    extraction = enrichment_to_gemini_extraction(
+        GeminiDiscoveryResult(),
+        GeminiEnrichmentResult(
+            elements=[
+                GeminiElementEnrichment(
+                    temporary_id="table",
+                    reference="V-01",
+                    quantity=1,
+                    measurements=[
+                        GeminiEnrichmentMeasurement(type="width", value=1000, unit="mm"),
+                        GeminiEnrichmentMeasurement(type="height", value=2000, unit="mm"),
+                    ],
+                ),
+                GeminiElementEnrichment(
+                    temporary_id="drawing",
+                    reference="V-1",
+                    operation_raw="proyectante",
+                    geometry_type_raw="rectangular",
+                    evidence=[
+                        GeminiEnrichmentEvidenceNote(
+                            source_id="source-1",
+                            text="V-1 elevacion 1000 x 2000",
+                            page_number=1,
+                        )
+                    ],
+                ),
+            ]
+        ),
+    )
+
+    assert len(extraction.elements) == 1
+    assert extraction.elements[0].reference == "V-01"
+    assert extraction.elements[0].quantity == 1
+    assert extraction.elements[0].operation == "proyectante"
+    assert extraction.elements[0].evidence_items[0].text == "V-1 elevacion 1000 x 2000"
+    assert DUPLICATE_REFERENCE_REASON in (extraction.notes or "")
+
+
+def test_inventory_reconciliation_marks_same_reference_source_conflict_for_review() -> None:
+    extraction = enrichment_to_gemini_extraction(
+        GeminiDiscoveryResult(),
+        GeminiEnrichmentResult(
+            elements=[
+                GeminiElementEnrichment(
+                    temporary_id="table",
+                    reference="PV-03",
+                    quantity=1,
+                    operation_raw="corrediza",
+                    measurements=[
+                        GeminiEnrichmentMeasurement(type="width", value=1000, unit="mm"),
+                    ],
+                ),
+                GeminiElementEnrichment(
+                    temporary_id="drawing",
+                    reference="PV-3",
+                    quantity=1,
+                    operation_raw="batiente",
+                    geometry_type_raw="rectangular",
+                ),
+            ]
+        ),
+    )
+
+    assert len(extraction.elements) == 1
+    assert extraction.elements[0].reference == "PV-03"
+    assert extraction.elements[0].status == ExtractionStatus.AMBIGUOUS
+    assert SOURCE_CONFLICT_REASON in extraction.elements[0].missing_or_unknown
+    assert SOURCE_CONFLICT_REASON in (extraction.notes or "")

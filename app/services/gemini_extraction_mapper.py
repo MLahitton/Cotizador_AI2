@@ -239,6 +239,7 @@ def _map_element(
 ) -> Element:
     evidence_ids = fallback_evidence_ids
     missing_fields = list(item.missing_or_unknown)
+    component_candidates = _component_candidates(item)
     return Element(
         id=item.id or f"element-{index}",
         reference=_traceable(item.reference, item.status, item.confidence, evidence_ids),
@@ -271,7 +272,7 @@ def _map_element(
         ],
         components=[
             _map_component(component, component_index, evidence_ids)
-            for component_index, component in enumerate(item.components, start=1)
+            for component_index, component in enumerate(component_candidates, start=1)
         ],
         geometry=_map_geometry(
             item.geometry,
@@ -283,7 +284,7 @@ def _map_element(
         assembly_type=_normalize_assembly_type(
             item.assembly_type,
             item.geometry_type,
-            item.components,
+            component_candidates,
         ),
         measurements=[
             _map_measurement(measurement, evidence_ids)
@@ -714,12 +715,148 @@ def _normalize_component_role(value: str | None) -> str | None:
         "PROJECTING",
         "SLIDING",
         "SWING",
+        "CASEMENT",
+        "FOLDING",
+        "GRILLE",
+        "LOUVER",
         "LEG",
         "PANEL",
         "UNKNOWN",
     }
     return normalized if normalized in canonical_roles else None
 
+
+def _component_candidates(item: GeminiElement) -> list[GeminiComponent]:
+    candidates = list(item.components)
+    existing_roles = {
+        role
+        for component in candidates
+        if (role := _normalize_component_role(component.role or component.type)) is not None
+    }
+
+    for role in _component_roles_from_item(item):
+        if role in existing_roles:
+            continue
+
+        candidates.append(
+            GeminiComponent(
+                role=role,
+                description="Derived from explicit item-level assembly signal.",
+                status=ExtractionStatus.INFERRED,
+                confidence=item.confidence,
+            )
+        )
+        existing_roles.add(role)
+
+    return candidates
+
+
+def _component_roles_from_item(item: GeminiElement) -> list[str]:
+    roles: list[str] = []
+    functional_type = _normalize_functional_type(
+        item.functional_type,
+        item.category,
+        item.configuration,
+    )
+    _append_component_role(roles, _component_role_from_functional_type(functional_type))
+    _append_component_role(roles, _component_role_from_operation(item.operation))
+
+    text = _compact_words(
+        " ".join(
+            value
+            for value in (
+                item.functional_type,
+                item.category,
+                item.configuration,
+                item.description,
+                item.notes,
+                *item.special_features,
+            )
+            if value
+        )
+    )
+    features = _normalize_special_features(
+        [*(item.special_features or []), item.configuration or "", item.description or ""]
+    )
+
+    if any(
+        feature in features
+        for feature in (
+            "ASSOCIATED_FIXED_PANEL",
+            "LOWER_FIXED_PANEL",
+            "UPPER_FIXED_PANEL",
+        )
+    ) or _has_contextual_fixed_signal(text):
+        _append_component_role(roles, "FIXED")
+
+    if _has_grille_signal(text):
+        _append_component_role(roles, "GRILLE")
+
+    return roles
+
+
+def _append_component_role(roles: list[str], role: str | None) -> None:
+    if role is not None and role not in roles:
+        roles.append(role)
+
+
+def _component_role_from_functional_type(value: str | None) -> str | None:
+    return {
+        "SLIDING_WINDOW": "SLIDING",
+        "SLIDING_DOOR": "SLIDING",
+        "PROJECTING": "PROJECTING",
+        "SWING_DOOR": "SWING",
+        "CASEMENT": "CASEMENT",
+        "FOLDING_WINDOW": "FOLDING",
+        "FOLDING_DOOR": "FOLDING",
+        "FIXED": "FIXED",
+        "GRILLE": "GRILLE",
+    }.get(value or "")
+
+
+def _component_role_from_operation(value: str | None) -> str | None:
+    text = _compact_words(value or "")
+    if not text:
+        return None
+    if "corred" in text or "sliding" in text:
+        return "SLIDING"
+    if "proyect" in text or "projecting" in text:
+        return "PROJECTING"
+    if "batiente" in text or "swing" in text:
+        return "SWING"
+    if "casement" in text:
+        return "CASEMENT"
+    if "plegable" in text or "folding" in text:
+        return "FOLDING"
+    if "fijo" in text or "fixed" in text:
+        return "FIXED"
+    if _has_grille_signal(text):
+        return "GRILLE"
+    return None
+
+
+def _has_contextual_fixed_signal(text: str) -> bool:
+    if "fijo" not in text and "fixed" not in text:
+        return False
+    return any(
+        term in text
+        for term in (
+            "asociado",
+            "associated",
+            "inferior",
+            "lower",
+            "superior",
+            "upper",
+            "lateral",
+            "side",
+            "con",
+            "with",
+        )
+    )
+
+
+def _has_grille_signal(text: str) -> bool:
+    return any(term in text for term in ("rejilla", "grille", "louver", "celosia", "persiana"))
 
 
 def _normalize_assembly_type(
@@ -741,10 +878,27 @@ def _normalize_assembly_type(
     geometry = _normalize_geometry_type(geometry_type)
     if geometry == "CORNER":
         return "CORNER"
-    roles = {_compact_words(component.role or component.type or "") for component in components}
-    if roles and any("project" in role or "proyect" in role for role in roles) and any(
-        "fixed" in role or "fijo" in role for role in roles
-    ):
+    roles = {
+        role
+        for component in components
+        if (role := _normalize_component_role(component.role or component.type)) is not None
+    }
+    functional_roles = {
+        role
+        for role in roles
+        if role
+        in {
+            "SLIDING",
+            "PROJECTING",
+            "SWING",
+            "CASEMENT",
+            "FOLDING",
+            "FIXED",
+            "GRILLE",
+            "LOUVER",
+        }
+    }
+    if len(functional_roles) > 1:
         return "COMPOSITE"
     return "MULTI_MODULE" if len(components) > 1 else None
 

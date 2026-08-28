@@ -235,13 +235,36 @@ Instrucciones:
   acero inoxidable.
 - Si texto y dibujo discrepan, conserva la discrepancia en notes/evidence_notes o
   warnings; no resuelvas silenciosamente la contradiccion.
+- Usa evidencia grafica o visual_description cuando exista para preservar partes
+  funcionales residuales como batiente + fijo o proyectante + fijo; no la uses para
+  inventar medidas o componentes que no esten soportados por el documento.
 - Las medidas pueden ser width, height, diameter, radius, length, depth, side_a,
   side_b o custom. Si la orientacion no es clara, no inventes width/height:
   conserva raw_label y el dato disponible.
-- Extrae assembly_type cuando el item comercial tenga estructura interna clara: SINGLE, MULTI_MODULE, COMPOSITE o CORNER.
-- Para MULTI_MODULE, COMPOSITE o CORNER, preserva cada submodulo/tramo/pano en components con role, measurements, quantity y geometry_raw cuando existan.
-- No conviertas automaticamente cada submodulo en un element independiente si pertenece a la misma referencia comercial.
-- Si la misma referencia aparece en niveles/contextos distintos, manten elementos separados y usa occurrence_context/evidence para distinguirlos.
+- Extrae assembly_type cuando el item comercial tenga estructura interna clara:
+  SINGLE, MULTI_MODULE, COMPOSITE o CORNER.
+- Para MULTI_MODULE, COMPOSITE o CORNER, preserva cada submodulo/tramo/pano
+  en components con role, measurements, quantity y geometry_raw cuando existan.
+- No colapses un assembly en un unico functional_type si hay varias partes
+  funcionales soportadas por evidencia.
+- components describe partes funcionales del mismo item comercial, no items
+  comerciales separados.
+- Usa components para cada parte funcional real: SLIDING, PROJECTING, SWING,
+  CASEMENT, FOLDING, FIXED, GRILLE o LOUVER cuando la evidencia lo soporte.
+- Si un item combina movil + fijo, movil + rejilla/louver, proyectante + fijo,
+  batiente + fijo o corrediza + fijo, conserva ambas partes en components.
+- Conserva fijo/rejilla/louver como components cuando son partes fisicas reales,
+  aunque tambien existan como special_features.
+- No conviertas un accesorio secundario en el unico tipo principal si existe una
+  ventana o puerta movil explicita.
+- No inventes components desde palabras aisladas sin contexto fisico suficiente.
+- No derives components solamente desde quantity, panel_count, movable_panel_count o
+  fixed_panel_count; esos conteos describen el item y solo apoyan componentes cuando
+  hay evidencia fisica/funcional adicional.
+- No conviertas automaticamente cada submodulo en un element independiente si
+  pertenece a la misma referencia comercial.
+- Si la misma referencia aparece en niveles/contextos distintos, manten elementos
+  separados y usa occurrence_context/evidence para distinguirlos.
 - Quantity representa cantidad comercial, no cantidad de components, paneles o tramos.
 - Mantener componentes simples. No uses recursividad.
 - No pierdas elementos incompletos.
@@ -353,6 +376,24 @@ Instrucciones:
 - La categoria, el vidrio y la configuracion pueden ser unknown si fueron evaluados pero
   no se pudieron determinar.
 - Detecta componentes, ocurrencias, variantes, relaciones y conflictos cuando existan.
+- No colapses assemblies en un unico tipo plano: cuando un mismo item tenga partes
+  funcionales distintas, preservalas en components.
+- components describe partes funcionales del mismo item comercial, no items
+  comerciales separados.
+- Usa roles de components como SLIDING, PROJECTING, SWING, CASEMENT, FOLDING,
+  FIXED, GRILLE o LOUVER cuando la evidencia lo soporte.
+- Conserva fixed panel, grille/louver, projecting sash, sliding sash y swing leaf
+  como components cuando sean partes fisicas reales.
+- No conviertas automaticamente un accesorio secundario en el functional_type
+  unico si existe una ventana o puerta movil explicita.
+- No inventes components desde palabras aisladas sin contexto fisico suficiente.
+- Usa evidencia grafica o visual_description cuando exista para preservar partes
+  funcionales residuales como batiente + fijo o proyectante + fijo; no la uses para
+  inventar medidas o componentes sin soporte documental.
+- Quantity representa cantidad comercial, no cantidad de components, paneles o tramos.
+- No derives components solamente desde quantity, panel_count, movable_panel_count o
+  fixed_panel_count; esos conteos solo apoyan componentes cuando hay evidencia
+  fisica/funcional adicional.
 - Excluye espejos del alcance de esta V1.
 - No calcules precios.
 - No apliques Classic, Essentials ni otras reglas comerciales.

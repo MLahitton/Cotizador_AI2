@@ -145,6 +145,26 @@ def test_extract_from_files_sends_all_files_inline_in_one_model_call(tmp_path: P
     assert result.extraction_metadata.source_count == 2
 
 
+def test_extract_from_files_prompt_requires_assembly_components_not_flat_collapse(
+    tmp_path: Path,
+) -> None:
+    pdf = tmp_path / "assembly.pdf"
+    pdf.write_bytes(b"%PDF-1.7\ncontent")
+    provider = _provider_with_fake_client()
+
+    provider.extract_from_files([pdf])
+
+    prompt = provider._provider._client.models.calls[0]["contents"][0].text
+    assert "No colapses assemblies en un unico tipo plano" in prompt
+    assert "components describe partes funcionales del mismo item comercial" in prompt
+    assert "SLIDING, PROJECTING, SWING, CASEMENT, FOLDING" in prompt
+    assert "FIXED, GRILLE o LOUVER" in prompt
+    assert "No inventes components desde palabras aisladas" in prompt
+    assert "evidencia grafica o visual_description" in prompt
+    assert "Quantity representa cantidad comercial" in prompt
+    assert "No derives components solamente desde quantity" in prompt
+
+
 def test_extract_from_files_sends_jpg_inline(tmp_path: Path) -> None:
     jpg = tmp_path / "foto.jpg"
     jpg.write_bytes(b"\xff\xd8\xffcontent")
