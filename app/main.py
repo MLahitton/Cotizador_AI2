@@ -1,5 +1,6 @@
-from fastapi import FastAPI
+﻿from fastapi import FastAPI
 
+from app.api.chat import router as chat_router
 from app.api.requirements import router as requirements_router
 from app.api.similarity import router as similarity_router
 
@@ -9,6 +10,7 @@ app = FastAPI(
 )
 
 app.include_router(requirements_router)
+app.include_router(chat_router)
 app.include_router(similarity_router)
 
 
