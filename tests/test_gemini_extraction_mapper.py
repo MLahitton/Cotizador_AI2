@@ -1,4 +1,4 @@
-import pytest
+﻿import pytest
 
 from app.models.common import ExtractionStatus
 from app.models.gemini_extraction import (
@@ -14,6 +14,7 @@ from app.models.gemini_extraction import (
     GeminiRequirementInfo,
     GeminiVariant,
 )
+from app.services.extraction_prompt import ELEMENT_ENRICHMENT_PROMPT
 from app.services.gemini_extraction_mapper import map_gemini_extraction_to_requirement_extraction
 
 
@@ -515,7 +516,7 @@ def test_mapper_normalizes_area_labels_without_losing_raw_values() -> None:
             GeminiElement(
                 measurements=[
                     GeminiMeasurement(type="custom", label=label, value=1.25, unit="m2")
-                    for label in ["M2", "M²", "m2", "m²"]
+                    for label in ["M2", "MÂ²", "m2", "mÂ²"]
                 ]
             )
         ]
@@ -531,9 +532,9 @@ def test_mapper_normalizes_area_labels_without_losing_raw_values() -> None:
     ]
     assert [measurement.raw_label for measurement in result.elements[0].measurements] == [
         "M2",
-        "M²",
+        "MÂ²",
         "m2",
-        "m²",
+        "mÂ²",
     ]
     assert all(measurement.raw_value == 1.25 for measurement in result.elements[0].measurements)
     assert all(measurement.raw_unit == "m2" for measurement in result.elements[0].measurements)
@@ -932,7 +933,7 @@ def test_mapper_keeps_pocket_as_special_feature_not_commercial_family() -> None:
         ("negro pintura al horno", "PAINTED", "BLACK", None),
         ("blanco", None, "WHITE", None),
         ("gris", None, "GRAY", None),
-        ("champaña", None, "CHAMPAGNE", None),
+        ("champaÃ±a", None, "CHAMPAGNE", None),
         ("anodizado blanco mate", "ANODIZED", "WHITE", "MATTE"),
         ("acero inoxidable", "STAINLESS_STEEL", None, None),
         ("inox", "STAINLESS_STEEL", None, None),
@@ -1409,3 +1410,115 @@ def test_mapper_preserves_incomplete_reference_with_reviewable_unknowns() -> Non
     assert element.reference.value == "V-99"
     assert element.measurements[0].value == 0.6
     assert element.missing_fields == ["height", "glass"]
+
+
+def test_mapper_does_not_use_table_measurement_row_as_operation_evidence() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="v-02",
+                reference="V-02",
+                functional_type="proyectante",
+                operation="proyectante",
+                panel_count=1,
+                movable_panel_count=1,
+                fixed_panel_count=0,
+                quantity=1,
+                measurements=[
+                    GeminiMeasurement(type="width", value=1.0, unit="m"),
+                    GeminiMeasurement(type="height", value=2.5, unit="m"),
+                ],
+                evidence_items=[
+                    GeminiEvidence(
+                        source_id="source-1",
+                        type="table",
+                        text="V-02 Piso 1 1.00 x 2.50 1",
+                        page_number=1,
+                    )
+                ],
+                status=ExtractionStatus.EXPLICIT,
+                confidence=0.95,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(
+        extraction,
+        default_source_id=None,
+        allowed_source_ids=["source-1"],
+    )
+    element = result.elements[0]
+
+    assert element.reference is not None
+    assert element.reference.value == "V-02"
+    assert element.quantity is not None
+    assert element.quantity.value == 1
+    assert [measurement.value for measurement in element.measurements] == [1.0, 2.5]
+    assert element.functional_type is None
+    assert element.configuration is not None
+    assert element.configuration.operation is None
+    assert element.configuration.panel_count is not None
+    assert element.configuration.panel_count.value is None
+    assert element.components == []
+    assert "visual_functional_evidence" in element.missing_fields
+    assert element.notes is not None
+    assert "Functional and panel signals require visual evidence" in element.notes
+
+
+def test_mapper_keeps_visual_evidence_as_operation_support() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="v-02",
+                reference="V-02",
+                functional_type="fijo",
+                operation="fijo",
+                panel_count=1,
+                movable_panel_count=0,
+                fixed_panel_count=1,
+                evidence_items=[
+                    GeminiEvidence(
+                        source_id="source-1",
+                        type="visual",
+                        visual_description="Dibujo V-02 muestra un pano fijo sin hoja movil.",
+                        page_number=1,
+                    )
+                ],
+                status=ExtractionStatus.EXPLICIT,
+                confidence=0.88,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(
+        extraction,
+        default_source_id=None,
+        allowed_source_ids=["source-1"],
+    )
+    element = result.elements[0]
+
+    assert element.functional_type is not None
+    assert element.functional_type.normalized == "FIXED"
+    assert element.configuration is not None
+    assert element.configuration.operation is not None
+    assert element.configuration.operation.normalized == "FIXED"
+    assert element.configuration.panel_count is not None
+    assert element.configuration.panel_count.value == 1
+    assert element.configuration.movable_panel_count is not None
+    assert element.configuration.movable_panel_count.value == 0
+    assert element.configuration.fixed_panel_count is not None
+    assert element.configuration.fixed_panel_count.value == 1
+    assert "visual_functional_evidence" not in element.missing_fields
+
+
+def test_enrichment_prompt_requires_visual_support_for_functional_signals() -> None:
+    assert "filas de tabla/cuadro textual" in ELEMENT_ENRICHMENT_PROMPT
+    assert "NO" in ELEMENT_ENRICHMENT_PROMPT
+    assert "autorizan por si solas functional_type_raw" in ELEMENT_ENRICHMENT_PROMPT
+    assert (
+        "usa evidencia visual del dibujo asociado al mismo reference"
+        in ELEMENT_ENRICHMENT_PROMPT
+    )
+    assert "No uses inferencias globales" in ELEMENT_ENRICHMENT_PROMPT
+    assert "Backend selecciona el" in ELEMENT_ENRICHMENT_PROMPT
+    assert "sistema final" in ELEMENT_ENRICHMENT_PROMPT

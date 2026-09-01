@@ -1,4 +1,4 @@
-import re
+﻿import re
 import unicodedata
 
 from app.models.common import ExtractionStatus, NormalizedValue, TraceableValue
@@ -238,6 +238,7 @@ def _map_element(
     fallback_evidence_ids: list[str],
 ) -> Element:
     evidence_ids = fallback_evidence_ids
+    item = _suppress_unsupported_visual_function_signals(item)
     missing_fields = list(item.missing_or_unknown)
     component_candidates = _component_candidates(item)
     return Element(
@@ -335,6 +336,133 @@ def _map_element(
     )
 
 
+
+def _suppress_unsupported_visual_function_signals(item: GeminiElement) -> GeminiElement:
+    if not _has_visual_functional_signal(item):
+        return item
+    if not _has_only_table_measurement_evidence(item):
+        return item
+
+    missing = list(item.missing_or_unknown)
+    if "visual_functional_evidence" not in missing:
+        missing.append("visual_functional_evidence")
+
+    return item.model_copy(
+        update={
+            "functional_type": None,
+            "operation": None,
+            "panel_count": None,
+            "movable_panel_count": None,
+            "fixed_panel_count": None,
+            "modulation": None,
+            "opening_direction": None,
+            "components": [],
+            "status": ExtractionStatus.AMBIGUOUS,
+            "missing_or_unknown": missing,
+            "notes": _append_note(
+                item.notes,
+                (
+                    "Functional and panel signals require visual evidence; "
+                    "table row evidence was preserved for measurements and quantity only."
+                ),
+            ),
+        }
+    )
+
+
+def _has_visual_functional_signal(item: GeminiElement) -> bool:
+    return any(
+        value not in (None, "", [])
+        for value in (
+            item.functional_type,
+            item.operation,
+            item.panel_count,
+            item.movable_panel_count,
+            item.fixed_panel_count,
+            item.modulation,
+            item.opening_direction,
+            item.components,
+        )
+    )
+
+
+def _has_only_table_measurement_evidence(item: GeminiElement) -> bool:
+    evidence_items = list(item.evidence_items)
+    if not evidence_items and item.evidence:
+        evidence_items = [GeminiEvidence(text=item.evidence)]
+    if not evidence_items:
+        return False
+    return all(_is_table_measurement_only_evidence(evidence) for evidence in evidence_items)
+
+
+def _is_table_measurement_only_evidence(evidence: GeminiEvidence) -> bool:
+    if evidence.visual_description:
+        return False
+    evidence_type = _compact_words(evidence.type or "")
+    if evidence_type and evidence_type in {
+        "visual",
+        "drawing",
+        "image",
+        "crop",
+        "dibujo",
+        "grafico",
+    }:
+        return False
+
+    text = evidence.text or evidence.location or evidence.notes or ""
+    compact = _compact_words(text)
+    if any(
+        token in compact
+        for token in (
+            "dibujo",
+            "detalle",
+            "elevacion",
+            "alzado",
+            "simbolo",
+            "crop",
+            "regionvisual",
+        )
+    ):
+        return False
+    if not compact:
+        return False
+    has_reference = re.search(r"\b(?:V|PV|P|F)-?\d+\b", text, flags=re.IGNORECASE) is not None
+    has_measurement = (
+        re.search(
+            r"\d+(?:[.,]\d+)?\s*(?:x|×)\s*\d+(?:[.,]\d+)?",
+            text,
+            flags=re.IGNORECASE,
+        )
+        is not None
+    )
+    has_function_word = any(
+        token in compact
+        for token in (
+            "proyectante",
+            "projecting",
+            "corrediza",
+            "corredizo",
+            "sliding",
+            "batiente",
+            "casement",
+            "fijo",
+            "fixed",
+            "plegable",
+            "folding",
+            "pivot",
+            "pivote",
+        )
+    )
+    return has_reference and has_measurement and not has_function_word
+
+
+def _append_note(current: str | None, note: str) -> str:
+    if not current:
+        return note
+    if note in current:
+        return current
+    return f"{current}\n{note}"
+
 def _map_optional_normalized_field(
     raw: str | None,
     status: ExtractionStatus | None,
@@ -413,7 +541,7 @@ def _is_area_measurement_label(value: str | None) -> bool:
         return False
 
     normalized = _compact_text(value)
-    return normalized in {"m2", "m²", "area"}
+    return normalized in {"m2", "m²", "mÂ²", "ma2", "area"}
 
 
 def _compact_text(value: str) -> str:
@@ -423,7 +551,14 @@ def _compact_text(value: str) -> str:
         for character in unicodedata.normalize("NFD", normalized)
         if unicodedata.category(character) != "Mn"
     )
-    return without_accents.replace(" ", "").replace("_", "").replace("-", "")
+    return (
+        without_accents.replace("²", "2")
+        .replace(" ", "")
+        .replace("_", "")
+        .replace("-", "")
+        .replace("â", "")
+        .replace("Â", "")
+    )
 
 
 def _measurement_area_mismatch_warnings(
@@ -516,11 +651,11 @@ def _area_measurement_to_square_meters(measurement: Measurement) -> float | None
         return None
 
     unit = _compact_text(measurement.unit or measurement.raw_unit or "m2")
-    if unit in {"m2", "m²", "metro2", "metros2", "metrocuadrado", "metroscuadrados"}:
+    if unit in {"m2", "m²", "mÂ²", "ma2", "metro2", "metros2", "metrocuadrado", "metroscuadrados"}:
         return measurement.value
-    if unit in {"cm2", "cm²", "centimetro2", "centimetros2", "centimetroscuadrados"}:
+    if unit in {"cm2", "cm²", "cmÂ²", "centimetro2", "centimetros2", "centimetroscuadrados"}:
         return measurement.value / 10_000
-    if unit in {"mm2", "mm²", "milimetro2", "milimetros2", "milimetroscuadrados"}:
+    if unit in {"mm2", "mm²", "mmÂ²", "milimetro2", "milimetros2", "milimetroscuadrados"}:
         return measurement.value / 1_000_000
 
     return None
@@ -1229,6 +1364,7 @@ def _normalize_finish_color(
         "gray": "GRAY",
         "grey": "GRAY",
         "champana": "CHAMPAGNE",
+        "champaa": "CHAMPAGNE",
         "champagne": "CHAMPAGNE",
     }
     for token, normalized in color_map.items():

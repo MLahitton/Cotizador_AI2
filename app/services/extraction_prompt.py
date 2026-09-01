@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 ELEMENT_DISCOVERY_PROMPT = """
 Ejecuta PASS 1: ELEMENT DISCOVERY para AI2.
@@ -194,7 +194,7 @@ Instrucciones:
   text, page_number, sheet_name, cell_range o visual_description segun aplique.
 - Usa exclusivamente los source_id listados en AVAILABLE SOURCES; no inventes source_id.
 - Cuando una afirmacion provenga de mas de una fuente, puede indicar varias evidencias.
-- Mantén separadas afirmaciones contradictorias entre fuentes; no fusiones evidencia
+- MantÃ©n separadas afirmaciones contradictorias entre fuentes; no fusiones evidencia
   incompatible silenciosamente.
 - Si no puedes asociar una evidencia a una fuente de forma segura, conserva el texto en
   evidence_notes y no inventes source_id.
@@ -209,6 +209,25 @@ Instrucciones:
 - Preserva medidas, cantidad, nivel/ubicacion, configuracion, vidrio, espesores,
   materiales, perfiles, acabados, accesorios y componentes cuando existan.
 - Conserva configuration_raw completo aunque tambien extraigas senales estructuradas.
+- Separacion obligatoria de fuentes: filas de tabla/cuadro textual se usan para reference,
+  level/ubicacion, width, height, area, quantity, notas, vidrio, acabado y textos raw; NO
+  autorizan por si solas functional_type_raw, operation_raw, panel_count,
+  movable_panel_count, fixed_panel_count, modulation_raw, assembly_type ni components.
+- Para functional_type_raw, operation_raw, panel counts, modulation, assembly_type y
+  components usa evidencia visual del dibujo asociado al mismo reference como fuente
+  primaria cuando exista. La evidencia debe describir el dibujo, simbolo, paneles,
+  hojas moviles/fijas, flechas, rieles, abatimientos o composicion visible.
+- Asocia cada reference con su dibujo por proximidad espacial, rotulo del detalle,
+  crop/region visual o agrupacion fisica de la lamina. No uses inferencias globales de
+  otros dibujos de la pagina para un item localizado.
+- Si solo tienes una fila como "V-02 Piso 1 1.00 2.50 1", conserva reference,
+  ubicacion, medidas y quantity, pero deja la funcion/operacion/paneles como unknown o
+  ambiguous y agrega evidence_notes explicando que falta soporte visual.
+- Si texto y dibujo no permiten certeza suficiente, prefiere review/ambiguous/unknown
+  antes que una operacion con confianza alta sin evidencia visual.
+- No uses nombres de sistemas Steel & Glass como Fermo, Siena, Napoles, Lago, Monza,
+  Monaco o 3890 para inferir la funcion; AI2 extrae senales, Backend selecciona el
+  sistema final.
 - Extrae functional_type_raw cuando haya evidencia suficiente de la funcion global:
   fijo, puerta batiente, puerta corrediza, ventana corrediza, proyectante, batiente,
   doble batiente, plegable, division de ducha/bano, pergola, rejilla, claraboya u otro.
