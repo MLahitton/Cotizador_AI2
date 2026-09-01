@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 import app.providers.gemini_extraction as provider_module
 from app.models.common import ExtractionStatus
@@ -553,8 +553,15 @@ def test_enrichment_to_gemini_extraction_preserves_context_as_structured_items()
                     evidence=[
                         GeminiEnrichmentEvidenceNote(
                             source_id="source-1",
+                            type="visual",
                             text="VIDRIO 6mm",
                             page_number=2,
+                            region={
+                                "x": 0.15,
+                                "y": 0.25,
+                                "width": 0.35,
+                                "height": 0.45,
+                            },
                         )
                     ],
                     evidence_notes=["Nota: TODOS LOS VIDRIOS SON DE ESPESOR DE 6mm"],
@@ -573,7 +580,10 @@ def test_enrichment_to_gemini_extraction_preserves_context_as_structured_items()
     )
     assert element.variants[0].label == "Alternativa con vidrio claro"
     assert element.evidence_items[0].source_id == "source-1"
+    assert element.evidence_items[0].type == "visual"
     assert element.evidence_items[0].page_number == 2
+    assert element.evidence_items[0].region is not None
+    assert element.evidence_items[0].region.x == 0.15
     assert element.evidence == "Nota: TODOS LOS VIDRIOS SON DE ESPESOR DE 6mm"
 
 

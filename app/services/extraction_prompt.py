@@ -169,6 +169,7 @@ Estructura JSON esperada:
     "variant_context": string|null,
     "evidence": [{"source_id": string|null, "text": string|null,
       "page_number": number|null, "sheet_name": string|null, "cell_range": string|null,
+      "region": {"x": number, "y": number, "width": number, "height": number}|null,
       "visual_description": string|null, "notes": string|null}],
     "evidence_notes": [string],
     "missing_or_unknown": [string],
@@ -191,7 +192,10 @@ Instrucciones:
 - NO omitas ninguno de los discoveries recibidos.
 - Analiza todas las fuentes para obtener informacion del discovery correspondiente.
 - Cuando una afirmacion tenga trazabilidad clara, agregala en evidence con source_id,
-  text, page_number, sheet_name, cell_range o visual_description segun aplique.
+  text, page_number, sheet_name, cell_range, region o visual_description segun aplique.
+- Para evidencia visual de PDF, incluye page_number real y region normalizada cuando exista.
+- Para evidencia visual de imagen, incluye region normalizada cuando exista y no inventes
+  page_number.
 - Usa exclusivamente los source_id listados en AVAILABLE SOURCES; no inventes source_id.
 - Cuando una afirmacion provenga de mas de una fuente, puede indicar varias evidencias.
 - MantÃ©n separadas afirmaciones contradictorias entre fuentes; no fusiones evidencia
@@ -346,7 +350,9 @@ Estructura JSON compacta disponible:
     "evidence_items": [{"source_id": string|null, "type": string|null,
       "text": string|null, "visual_description": string|null,
       "page_number": number|null, "sheet_name": string|null,
-      "cell_range": string|null, "notes": string|null}],
+      "cell_range": string|null,
+      "region": {"x": number, "y": number, "width": number, "height": number}|null,
+      "notes": string|null}],
     "missing_or_unknown": [string],
     "conflicts": [string],
     "relationships": [string],
@@ -357,6 +363,7 @@ Estructura JSON compacta disponible:
   "evidence": [{"id": string|null, "source_id": string|null, "type": string|null,
     "text": string|null, "visual_description": string|null, "location": string|null,
     "page_number": number|null, "sheet_name": string|null, "cell_range": string|null,
+    "region": {"x": number, "y": number, "width": number, "height": number}|null,
     "status": status|null, "confidence": number|null, "notes": string|null}],
   "relationships": [{"description": string|null, "from_element": string|null,
     "to_element": string|null, "type": string|null, "status": status|null,

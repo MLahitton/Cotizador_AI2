@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
+﻿from pydantic import BaseModel, Field
 
 from app.models.common import ExtractionStatus
+from app.models.evidence import Region
 
 
 class GeminiValue(BaseModel):
@@ -169,6 +170,7 @@ class GeminiEvidence(BaseModel):
     page_number: int | None = None
     sheet_name: str | None = None
     cell_range: str | None = None
+    region: Region | None = None
     status: ExtractionStatus | None = None
     confidence: float | None = None
     notes: str | None = None

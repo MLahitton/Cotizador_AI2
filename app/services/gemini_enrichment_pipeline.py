@@ -1,4 +1,4 @@
-from app.models.common import ExtractionStatus
+﻿from app.models.common import ExtractionStatus
 from app.models.gemini_discovery import GeminiDiscoveryResult, GeminiElementDiscovery
 from app.models.gemini_enrichment import (
     GeminiElementEnrichment,
@@ -238,10 +238,12 @@ def _component(item: GeminiEnrichmentComponent, index: int) -> GeminiComponent:
 def _evidence_note(item) -> GeminiEvidence:
     return GeminiEvidence(
         source_id=item.source_id,
+        type=item.type,
         text=item.text,
         page_number=item.page_number,
         sheet_name=item.sheet_name,
         cell_range=item.cell_range,
+        region=item.region,
         visual_description=item.visual_description,
         notes=item.notes,
     )

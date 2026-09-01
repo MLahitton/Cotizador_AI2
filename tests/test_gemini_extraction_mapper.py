@@ -408,8 +408,15 @@ def test_mapper_preserves_pdf_xlsx_and_image_evidence_fields() -> None:
                     ),
                     GeminiEvidence(
                         source_id="source-3",
+                        type="visual",
                         text="Foto detalle",
                         visual_description="Se observa vidrio",
+                        region={
+                            "x": 0.10,
+                            "y": 0.20,
+                            "width": 0.30,
+                            "height": 0.40,
+                        },
                     ),
                 ],
             )
@@ -427,8 +434,13 @@ def test_mapper_preserves_pdf_xlsx_and_image_evidence_fields() -> None:
     assert result.evidence[1].sheet_name == "APTO85"
     assert result.evidence[1].cell_range == "B14:H14"
     assert result.evidence[1].page_number is None
+    assert result.evidence[2].type == "visual"
     assert result.evidence[2].visual_description == "Se observa vidrio"
-    assert result.evidence[2].region is None
+    assert result.evidence[2].region is not None
+    assert result.evidence[2].region.x == 0.10
+    assert result.evidence[2].region.y == 0.20
+    assert result.evidence[2].region.width == 0.30
+    assert result.evidence[2].region.height == 0.40
 
 
 def test_mapper_preserves_root_evidence_source_information() -> None:
@@ -441,6 +453,7 @@ def test_mapper_preserves_root_evidence_source_information() -> None:
                 text="Detalle de fachada",
                 visual_description="Se observa vidrio",
                 location="lamina A",
+                region={"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4},
             )
         ]
     )
@@ -452,6 +465,8 @@ def test_mapper_preserves_root_evidence_source_information() -> None:
     assert result.evidence[0].type == "visual"
     assert result.evidence[0].extracted_text == "Detalle de fachada"
     assert result.evidence[0].visual_description == "Se observa vidrio"
+    assert result.evidence[0].region is not None
+    assert result.evidence[0].region.height == 0.4
 
 
 def test_mapper_null_explicit_value_becomes_unknown_but_real_value_stays_explicit() -> None:

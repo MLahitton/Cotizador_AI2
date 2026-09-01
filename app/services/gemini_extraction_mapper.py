@@ -1558,6 +1558,7 @@ def _map_evidence(
         page_number=item.page_number,
         sheet_name=item.sheet_name,
         cell_range=item.cell_range,
+        region=item.region,
         extracted_text=item.text,
         visual_description=item.visual_description or item.location,
         status=_status_for_value(item.text or item.visual_description, item.status),

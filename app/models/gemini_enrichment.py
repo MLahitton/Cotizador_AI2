@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
+﻿from pydantic import BaseModel, Field
 
 from app.models.common import ExtractionStatus
+from app.models.evidence import Region
 from app.models.requirement import TokenUsage
 
 
@@ -43,10 +44,12 @@ class GeminiEnrichmentGlass(BaseModel):
 
 class GeminiEnrichmentEvidenceNote(BaseModel):
     source_id: str | None = None
+    type: str | None = None
     text: str | None = None
     page_number: int | None = None
     sheet_name: str | None = None
     cell_range: str | None = None
+    region: Region | None = None
     visual_description: str | None = None
     notes: str | None = None
 
