@@ -54,11 +54,12 @@ def interpret_chat_action(
     intent = interpreter.interpret(request)
     logger.info(
         "CHAT_ACTION_INTENT actionType=%s scope=%s targetReference=%s "
-        "confidence=%s requiresClarification=%s",
+        "confidence=%s requiresClarification=%s classificationReason=%s",
         intent.actionType,
         intent.scope,
         intent.targetReference,
         intent.confidence,
         intent.requiresClarification,
+        intent.classificationReason,
     )
     return intent
