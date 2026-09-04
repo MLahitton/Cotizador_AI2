@@ -18,6 +18,11 @@ MODEL_INFERRED = "MODEL_INFERRED"
 TABLE = "TABLE"
 VISION = "VISION"
 UNKNOWN_NUMERIC = "UNKNOWN_NUMERIC"
+MODEL_NOTE = "MODEL_NOTE"
+SOURCE_GROUNDED_QUANTITY = "SOURCE_GROUNDED_QUANTITY"
+MODEL_EVIDENCE_QUANTITY = "MODEL_EVIDENCE_QUANTITY"
+MODEL_EXPLICIT_QUANTITY = "MODEL_EXPLICIT_QUANTITY"
+MODEL_INFERRED_QUANTITY = "MODEL_INFERRED_QUANTITY"
 
 
 class NumericCandidateTrace(BaseModel):
@@ -35,6 +40,7 @@ class NumericCandidateTrace(BaseModel):
     evidence_text: str | None = None
     status: ExtractionStatus | None = None
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    grounding_type: str | None = None
 
 
 class FinalQuantityTrace(BaseModel):
@@ -81,15 +87,22 @@ def _element_trace(
 ) -> NumericElementTrace:
     candidates: list[NumericCandidateTrace] = []
     if element.quantity not in (None, ""):
+        quantity_status = element.quantity_status or element.status
+        quantity_confidence = (
+            element.quantity_confidence
+            if element.quantity_confidence is not None
+            else element.confidence
+        )
         candidates.append(
             _candidate(
                 element,
                 field_path="quantity",
                 semantic_role="QUANTITY",
                 value=element.quantity,
-                source_type=_source_type_for_status(element.status),
-                status=element.status,
-                confidence=element.confidence,
+                source_type=_source_type_for_status(quantity_status),
+                status=quantity_status,
+                confidence=quantity_confidence,
+                grounding_type=_model_quantity_grounding_type(quantity_status),
             )
         )
 
@@ -141,7 +154,9 @@ def _element_trace(
                 element,
                 text=note,
                 field_path=f"evidence_notes[{index}]",
-                source_type=UNKNOWN_NUMERIC,
+                source_type=MODEL_NOTE,
+                status_override=ExtractionStatus.INFERRED,
+                grounding_type=MODEL_INFERRED_QUANTITY,
                 source_id=None,
                 source_file_name=None,
                 page_number=None,
@@ -161,8 +176,12 @@ def _element_trace(
             origin_candidate_field_path="quantity"
             if element.quantity not in (None, "")
             else None,
-            status=element.status,
-            confidence=element.confidence,
+            status=element.quantity_status or element.status,
+            confidence=(
+                element.quantity_confidence
+                if element.quantity_confidence is not None
+                else element.confidence
+            ),
         ),
     )
 
@@ -200,6 +219,7 @@ def _candidate(
     status: ExtractionStatus | None,
     confidence: float | None,
     evidence_text: str | None = None,
+    grounding_type: str | None = None,
 ) -> NumericCandidateTrace:
     return NumericCandidateTrace(
         element_temporary_id=element.temporary_id,
@@ -210,6 +230,7 @@ def _candidate(
         evidence_text=evidence_text,
         status=status,
         confidence=confidence,
+        grounding_type=grounding_type,
     )
 
 
@@ -247,6 +268,7 @@ def _evidence_numeric_candidates(
         sheet_name=evidence.sheet_name,
         cell_range=evidence.cell_range,
         region=evidence.region,
+        grounding_type=MODEL_EVIDENCE_QUANTITY,
     )
 
 
@@ -262,6 +284,8 @@ def _text_numeric_candidates(
     sheet_name: str | None,
     cell_range: str | None,
     region: Region | None,
+    status_override: ExtractionStatus | None = None,
+    grounding_type: str | None = None,
 ) -> list[NumericCandidateTrace]:
     candidates: list[NumericCandidateTrace] = []
     for semantic_role, pattern in _TEXT_PATTERNS:
@@ -280,8 +304,13 @@ def _text_numeric_candidates(
                     cell_range=cell_range,
                     region=region,
                     evidence_text=match.group(0),
-                    status=_status_for_text_role(semantic_role),
+                    status=status_override or _status_for_text_role(semantic_role),
                     confidence=None,
+                    grounding_type=(
+                        grounding_type
+                        if semantic_role == "QUANTITY"
+                        else None
+                    ),
                 )
             )
             if semantic_role == "LEVEL_RANGE":
@@ -301,8 +330,9 @@ def _text_numeric_candidates(
                             cell_range=cell_range,
                             region=region,
                             evidence_text=match.group(0),
-                            status=ExtractionStatus.INFERRED,
+                            status=status_override or ExtractionStatus.INFERRED,
                             confidence=None,
+                            grounding_type=MODEL_INFERRED_QUANTITY,
                         )
                     )
     return candidates
@@ -388,6 +418,12 @@ def _source_type_for_status(status: ExtractionStatus | None) -> str:
     if status == ExtractionStatus.INFERRED:
         return MODEL_INFERRED
     return MODEL_EXPLICIT
+
+
+def _model_quantity_grounding_type(status: ExtractionStatus | None) -> str:
+    if status == ExtractionStatus.EXPLICIT:
+        return MODEL_EXPLICIT_QUANTITY
+    return MODEL_INFERRED_QUANTITY
 
 
 def _evidence_source_type(evidence: GeminiEnrichmentEvidenceNote) -> str:

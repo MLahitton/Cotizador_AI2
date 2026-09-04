@@ -1,6 +1,9 @@
+import json
 import logging
+import os
 import tempfile
 import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
@@ -10,7 +13,11 @@ from google.genai.errors import APIError
 from pydantic import ValidationError
 
 from app.models.requirement_extraction import RequirementExtraction
-from app.providers.gemini_extraction import GeminiExtractionProvider
+from app.providers.gemini_extraction import (
+    GeminiExtractionProvider,
+    GeminiFullPipelineDebugCapture,
+)
+from app.services.pipeline_trace import build_requirement_pipeline_trace
 
 ALLOWED_UPLOAD_MIME_TYPES = {
     "application/pdf",
@@ -81,13 +88,32 @@ async def extract_requirement(
                 if callable(provider_dependency)
                 else provider_dependency
             )
+            pipeline_trace_enabled = _public_pipeline_trace_enabled()
+            debug_capture = (
+                GeminiFullPipelineDebugCapture()
+                if pipeline_trace_enabled
+                else None
+            )
+            processing_attempt_id = str(uuid.uuid4())
             failed_stage = "LLM_STRUCTURED_EXTRACTION"
             extraction_started = time.perf_counter()
             result = provider.extract_with_discovery_from_files(
                 temp_paths,
                 project_id=project_id,
                 requirement_id=requirement_id,
+                debug_capture=debug_capture,
             )
+            if debug_capture is not None:
+                for row in build_requirement_pipeline_trace(
+                    entrypoint="PUBLIC_ENDPOINT",
+                    processing_attempt_id=processing_attempt_id,
+                    debug_capture=debug_capture,
+                    extraction=result,
+                ):
+                    logger.info(
+                        "AI2_PUBLIC_PIPELINE_TRACE %s",
+                        json.dumps(row, ensure_ascii=False, default=str),
+                    )
             _log_perf(
                 requirement_id,
                 "LLM_STRUCTURED_EXTRACTION",
@@ -189,6 +215,15 @@ def _http_error_from_value_error(exc: ValueError) -> HTTPException:
 
 def _elapsed_ms(started: float) -> int:
     return int((time.perf_counter() - started) * 1000)
+
+
+def _public_pipeline_trace_enabled() -> bool:
+    return os.getenv("AI2_PUBLIC_PIPELINE_TRACE", "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _log_perf(requirement_id: str | None, stage: str, elapsed_ms: int, **values) -> None:

@@ -237,6 +237,12 @@ Instrucciones:
   de cantidad, deja quantity null o ambiguous/unknown y conserva evidencia_notes.
 - La evidencia de quantity debe citar texto/celda/region real de la fuente; no reconstruyas
   frases como CANTIDAD: X si ese label-value no aparece asi en el documento.
+- Separa source evidence de model notes: evidence[].text debe ser transcripcion fiel
+  del documento o celda/region observada; interpretaciones como "se asigna cantidad",
+  "se repite" o "parece corresponder" van en evidence_notes/notes y no justifican por
+  si solas una quantity explicit.
+- Si el documento muestra CANTIDAD: 25 y tambien niveles 5 al 9, quantity es 25;
+  el 5 del rango es repetition_count/contexto, no quantity comercial.
 - Si texto nativo y estructura visual discrepan sobre quantity, conserva el conflicto y
   baja confidence; no marques explicit/high-confidence sin soporte claro.
 - Para functional_type_raw, operation_raw, panel counts, modulation, assembly_type y
@@ -545,6 +551,94 @@ componentes de otros oficios en componentes cotizables de vidrieria.
 
 Si scope es uncertain: intenta obtener informacion adicional que permita entender si
 existe componente de vidrio, sin eliminar el discovery.
+""".strip()
+
+
+def build_quantity_review_prompt(
+    *,
+    temporary_id: str,
+    reference: str | None,
+    original_value: str | int | float | None,
+    trigger_reason: str,
+    numeric_context: str,
+    source_ids: list[str],
+    numeric_collisions: str = "null",
+    source_locator: str = "null",
+) -> str:
+    return f"""
+Revisa exclusivamente la cantidad comercial del elemento contra la fuente original.
+Haz una relectura independiente: inspecciona primero la fuente original en el
+locator provisto, identifica que cantidad comercial observas y solo despues
+comparala contra el valor de primera pasada.
+
+No cambies dimensiones, geometry, functional type, components, glass, finish,
+reference ni ninguna otra propiedad.
+
+El valor actual es UNTRUSTED_FIRST_PASS_VALUE. No lo uses como evidencia.
+No uses evidence_text o narrative de la primera pasada como verdad fuente.
+Relee la fuente original.
+
+No uses numero de piso, nivel, rango de niveles, repeticion, paneles, componentes,
+item number, reference number ni dimensiones como quantity salvo que la fuente
+explicitamente los identifique como cantidad comercial con una etiqueta tipo
+CANTIDAD, CANT., CNT, QTY, UNIDADES, UND o CANTIDAD TOTAL.
+
+Devuelve exclusivamente JSON valido con esta estructura:
+{{
+  "temporary_id": string,
+  "reference": string|null,
+  "field": "quantity",
+  "original_value": string|number|null,
+  "observed_quantity": string|number|null,
+  "observed_text": string|null,
+  "reviewed_value": string|number|null,
+  "decision": "CONFIRMED"|"CORRECTED"|"AMBIGUOUS"|"UNRESOLVED",
+  "reason": string,
+  "confidence": number|null,
+  "source_ids": [string]
+}}
+
+Elemento:
+- temporary_id: {temporary_id!r}
+- reference: {reference!r}
+- UNTRUSTED_FIRST_PASS_VALUE: {original_value!r}
+- trigger_reason: {trigger_reason}
+- source_ids relacionados: {source_ids!r}
+
+Locator preferido para revisar el campo sospechoso:
+{source_locator}
+
+Usa prioritariamente ese locator si existe:
+- PDF: source_id + page_number + region, o source_id + page_number + texto/contexto.
+- Imagen: source_id + region o source_id + texto/contexto.
+- XLSX: source_id + sheet_name + cell_range.
+- Texto: text_context/span si esta disponible.
+
+El locator enfoca la revision; no inventes valores ausentes. Si el locator no contiene
+evidencia suficiente para confirmar o corregir quantity, devuelve AMBIGUOUS o UNRESOLVED.
+No mezcles evidencia de referencias vecinas ni de otras fuentes si el locator ya identifica
+la fuente correcta.
+
+Contexto numerico detectado:
+{numeric_context}
+
+NUMERIC ROLE COLLISIONS
+Current quantity: {original_value!r}
+Other local roles with the same/similar value:
+{numeric_collisions}
+
+Si existe colision numerica con LEVEL, FLOOR, LEVEL_RANGE, REPETITION_COUNT,
+COMPONENT_COUNT, PANEL_COUNT o ITEM_NUMBER, no confirmes quantity solo porque el
+numero coincide. Confirma quantity unicamente si la fuente original asocia
+claramente ese valor con la cantidad comercial del elemento completo.
+
+Procedimiento:
+1. Inspecciona la fuente original en el locator.
+2. Reporta observed_quantity y observed_text con lo que lees directamente.
+3. Diferencia cantidad comercial de niveles, repeticiones, paneles/componentes o item.
+4. Compara observed_quantity contra UNTRUSTED_FIRST_PASS_VALUE.
+5. Si observed_quantity coincide, usa CONFIRMED; si difiere, usa CORRECTED; si no
+   puedes leer/asociar una cantidad comercial, usa AMBIGUOUS o UNRESOLVED.
 """.strip()
 
 

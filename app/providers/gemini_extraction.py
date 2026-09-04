@@ -1,17 +1,20 @@
+import json
 import logging
 import re
 import struct
 import time
 import zipfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 from google.genai import types
+from pydantic import ValidationError
 
 from app.core.settings import get_settings
 from app.models.evidence import Source
 from app.models.gemini_discovery import GeminiDiscoveryResult
-from app.models.gemini_enrichment import GeminiEnrichmentResult
+from app.models.gemini_enrichment import GeminiElementEnrichment, GeminiEnrichmentResult
 from app.models.gemini_extraction import GeminiExtraction
 from app.models.gemini_scope import GeminiScopeResult
 from app.models.requirement import TokenUsage
@@ -22,6 +25,7 @@ from app.services.extraction_prompt import (
     build_file_enrichment_prompt,
     build_file_extraction_prompt,
     build_file_scope_prompt,
+    build_quantity_review_prompt,
     build_text_extraction_prompt,
 )
 from app.services.gemini_enrichment_pipeline import (
@@ -44,10 +48,28 @@ from app.services.inventory_trace import (
     final_inventory_elements,
 )
 from app.services.numeric_trace import NumericResolutionTrace, build_numeric_resolution_trace
+from app.services.quantity_grounding import (
+    QuantityGroundingDecision,
+    build_source_independent_quantity_candidates,
+    validate_enrichment_quantities,
+)
 from app.services.region_sanitizer import (
     RegionSanitizationEvent,
     SourceRegionFrame,
-    sanitize_enrichment_regions_json,
+    sanitize_enrichment_regions_payload,
+)
+from app.services.semantic_review import (
+    SemanticFieldReview,
+    SemanticReviewTrace,
+    SourceLocator,
+    apply_quantity_review,
+    build_quantity_review_numeric_context,
+    completed_review_trace,
+    parse_semantic_field_review_response,
+    quantity_numeric_collision_summary,
+    resolve_quantity_review_locator,
+    should_review_quantity,
+    skipped_review_trace,
 )
 
 logger = logging.getLogger(__name__)
@@ -387,7 +409,7 @@ class GeminiExtractionProvider:
         batch_results = []
         batch_usage = []
 
-        for batch in batches:
+        for batch_number, batch in enumerate(batches, start=1):
             response = self._generate_json(
                 _build_multifile_contents(
                     build_file_enrichment_prompt(
@@ -402,6 +424,23 @@ class GeminiExtractionProvider:
             batch_result, region_events = _parse_gemini_enrichment_response(
                 response,
                 source_frames=_source_region_frames(context.file_specs),
+                batch_number=batch_number,
+                requested_temporary_ids=_requested_temporary_ids(batch),
+            )
+            batch_result, quantity_grounding_decisions = validate_enrichment_quantities(
+                batch_result,
+                source_candidates_by_reference=context.quantity_candidates_by_reference,
+            )
+            batch_numeric_trace = build_numeric_resolution_trace(
+                batch_result,
+                stage=f"enrichment_batch_{len(batch_results) + 1}",
+                source_file_names_by_id=_source_file_names_by_id(context.file_specs),
+            )
+            batch_result, semantic_review_traces = self._review_batch_quantities(
+                context,
+                batch_result,
+                quantity_grounding_decisions,
+                batch_numeric_trace,
             )
             usage = _extract_token_usage(response)
             batch_results.append(batch_result)
@@ -411,17 +450,17 @@ class GeminiExtractionProvider:
                 debug_capture.raw_responses.append(getattr(response, "text", None))
                 debug_capture.batch_results.append(batch_result)
                 debug_capture.batch_usage.append(usage)
+                debug_capture.quantity_grounding_decisions.extend(
+                    quantity_grounding_decisions
+                )
+                debug_capture.semantic_review_decisions.extend(semantic_review_traces)
                 debug_capture.region_sanitization_events.extend(region_events)
                 debug_capture.inventory_trace.add_stage(
                     f"ENRICHMENT_BATCH_{len(debug_capture.batch_results)}",
                     enrichment_inventory_elements(batch_result),
                 )
                 debug_capture.batch_numeric_traces.append(
-                    build_numeric_resolution_trace(
-                        batch_result,
-                        stage=f"enrichment_batch_{len(debug_capture.batch_results)}",
-                        source_file_names_by_id=_source_file_names_by_id(context.file_specs),
-                    )
+                    batch_numeric_trace
                 )
 
         merged = merge_enrichment_batches(discovery, batch_results)
@@ -436,6 +475,144 @@ class GeminiExtractionProvider:
             debug_capture.batch_size = resolved_batch_size
             debug_capture.model = self._provider.model
         return merged
+
+    def _review_batch_quantities(
+        self,
+        context: _RequirementFileContext,
+        enrichment: GeminiEnrichmentResult,
+        grounding_decisions: list[QuantityGroundingDecision],
+        numeric_trace: NumericResolutionTrace,
+    ) -> tuple[GeminiEnrichmentResult, list[SemanticReviewTrace]]:
+        grounding_by_id = {
+            decision.temporary_id: decision
+            for decision in grounding_decisions
+        }
+        numeric_by_id = {
+            element.element_temporary_id: element
+            for element in numeric_trace.elements
+        }
+        elements = []
+        traces = []
+
+        for element in enrichment.elements:
+            should_review, trigger_reason = should_review_quantity(
+                element,
+                grounding_by_id.get(element.temporary_id),
+                numeric_by_id.get(element.temporary_id),
+            )
+            if not should_review:
+                elements.append(element)
+                traces.append(skipped_review_trace(element, trigger_reason))
+                continue
+
+            locator = resolve_quantity_review_locator(
+                element,
+                grounding_by_id.get(element.temporary_id),
+                numeric_by_id.get(element.temporary_id),
+            )
+            source_ids = _review_source_ids(locator, element, context.file_specs)
+            logger.info(
+                "[SEMANTIC_REVIEW] reviewing quantity for %s/%s",
+                element.temporary_id,
+                element.reference,
+            )
+            try:
+                review = self._review_quantity_with_gemini(
+                    context,
+                    element,
+                    trigger_reason,
+                    numeric_by_id.get(element.temporary_id),
+                    source_ids,
+                    locator,
+                )
+            except Exception as exc:  # pragma: no cover - defensive runtime guard
+                logger.warning(
+                    "[SEMANTIC_REVIEW] quantity review unresolved for %s: %s",
+                    element.temporary_id,
+                    exc,
+                )
+                review = SemanticFieldReview(
+                    temporary_id=element.temporary_id,
+                    reference=element.reference,
+                    original_value=element.quantity,
+                    reviewed_value=None,
+                    decision="UNRESOLVED",
+                    reason=f"Reviewer failed: {type(exc).__name__}",
+                    source_ids=source_ids,
+                )
+
+            reviewed_element = apply_quantity_review(
+                element,
+                review,
+                locator,
+                numeric_by_id.get(element.temporary_id),
+            )
+            logger.info(
+                "[SEMANTIC_REVIEW] %s quantity for %s/%s reason=%s",
+                review.decision,
+                element.temporary_id,
+                element.reference,
+                review.reason,
+            )
+            elements.append(reviewed_element)
+            traces.append(
+                completed_review_trace(
+                    element,
+                    reviewed_element,
+                    trigger_reason,
+                    review,
+                    locator,
+                    numeric_by_id.get(element.temporary_id),
+                )
+            )
+
+        return GeminiEnrichmentResult(
+            elements=elements,
+            warnings=list(enrichment.warnings),
+            usage=enrichment.usage,
+        ), traces
+
+    def _review_quantity_with_gemini(
+        self,
+        context: _RequirementFileContext,
+        element: GeminiElementEnrichment,
+        trigger_reason: str,
+        numeric_trace: object,
+        source_ids: list[str],
+        locator: SourceLocator,
+    ) -> SemanticFieldReview:
+        response = self._generate_json(
+            _build_multifile_contents(
+                build_quantity_review_prompt(
+                    temporary_id=element.temporary_id,
+                    reference=element.reference,
+                    original_value=element.quantity,
+                    trigger_reason=trigger_reason,
+                    numeric_context=_model_json(
+                        build_quantity_review_numeric_context(numeric_trace)
+                    ),
+                    numeric_collisions=_model_json(
+                        quantity_numeric_collision_summary(
+                            element.quantity,
+                            numeric_trace,
+                        )
+                    ),
+                    source_ids=source_ids,
+                    source_locator=_model_json(locator),
+                ),
+                _file_specs_for_source_ids(context.file_specs, source_ids),
+            )
+        )
+        text = getattr(response, "text", None)
+        if not text:
+            raise ValueError("Gemini no devolvio texto JSON para SemanticFieldReview.")
+        return parse_semantic_field_review_response(
+            text,
+            temporary_id=element.temporary_id,
+            reference=element.reference,
+            original_value=element.quantity,
+            source_ids=source_ids,
+        )
 
     def _generate_json(self, contents):
         return self._provider._client.models.generate_content(
@@ -459,10 +636,14 @@ class _RequirementFileContext:
         self._owner = owner
         self.paths = [Path(file) for file in files]
         self.file_specs: list[_LocalFileSpec] = []
+        self.quantity_candidates_by_reference = {}
 
     def __enter__(self) -> _RequirementFileContext:
         _ = self._owner
         self.file_specs = [_prepare_file_spec(path) for path in self.paths]
+        self.quantity_candidates_by_reference = build_source_independent_quantity_candidates(
+            self.file_specs
+        )
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
@@ -501,6 +682,8 @@ class GeminiEnrichmentDebugCapture:
     inventory_trace: InventoryDebugTrace | None = None
     merged_result: GeminiEnrichmentResult | None = None
     merged_numeric_trace: NumericResolutionTrace | None = None
+    quantity_grounding_decisions: list[QuantityGroundingDecision] | None = None
+    semantic_review_decisions: list[SemanticReviewTrace] | None = None
     batch_size: int | None = None
     model: str | None = None
 
@@ -515,6 +698,16 @@ class GeminiEnrichmentDebugCapture:
             []
             if self.region_sanitization_events is None
             else self.region_sanitization_events
+        )
+        self.quantity_grounding_decisions = (
+            []
+            if self.quantity_grounding_decisions is None
+            else self.quantity_grounding_decisions
+        )
+        self.semantic_review_decisions = (
+            []
+            if self.semantic_review_decisions is None
+            else self.semantic_review_decisions
         )
         self.inventory_trace = (
             InventoryDebugTrace()
@@ -538,6 +731,32 @@ class GeminiFullPipelineDebugCapture:
     model: str | None = None
     batch_size: int | None = None
     batch_count: int | None = None
+
+
+@dataclass(frozen=True)
+class GeminiEnrichmentParseDiagnostic:
+    stage: str
+    batch_number: int | None
+    requested_temporary_ids: list[str]
+    response_python_type: str | None
+    response_top_level_shape: str
+    validation_error_summary: list[dict[str, Any]]
+    raw_text_length: int
+    raw_text_prefix: str
+    raw_text_suffix: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+class GeminiEnrichmentParseError(ValueError):
+    def __init__(
+        self,
+        message: str,
+        diagnostic: GeminiEnrichmentParseDiagnostic,
+    ) -> None:
+        super().__init__(message)
+        self.diagnostic = diagnostic
 
 
 def _prepare_file_spec(path: Path) -> _LocalFileSpec:
@@ -589,6 +808,36 @@ def _source_file_names_by_id(file_specs: list[_LocalFileSpec]) -> dict[str, str]
     }
 
 
+def _file_specs_for_source_ids(
+    file_specs: list[_LocalFileSpec],
+    source_ids: list[str],
+) -> list[_LocalFileSpec]:
+    selected = []
+    requested = set(source_ids)
+    for index, spec in enumerate(file_specs, start=1):
+        if f"source-{index}" in requested:
+            selected.append(spec)
+    return selected or file_specs
+
+
+def _element_source_ids(element: GeminiElementEnrichment) -> list[str]:
+    values: list[str] = []
+    for evidence in element.evidence:
+        if evidence.source_id and evidence.source_id not in values:
+            values.append(evidence.source_id)
+    return values
+
+
+def _review_source_ids(
+    locator: SourceLocator,
+    element: GeminiElementEnrichment,
+    file_specs: list[_LocalFileSpec],
+) -> list[str]:
+    if locator.source_id:
+        return [locator.source_id]
+    return _element_source_ids(element) or _source_ids(file_specs)
+
+
 def _source_region_frames(file_specs: list[_LocalFileSpec]) -> dict[str, SourceRegionFrame]:
     frames: dict[str, SourceRegionFrame] = {}
     for index, spec in enumerate(file_specs, start=1):
@@ -619,6 +868,14 @@ def _parse_gemini_extraction_response(
         return gemini_extraction
     except Exception as exc:
         raise ValueError("Gemini devolvio JSON invalido para GeminiExtraction.") from exc
+
+
+def _model_json(value) -> str:
+    if value is None:
+        return "null"
+    if hasattr(value, "model_dump"):
+        return json.dumps(value.model_dump(mode="json"), ensure_ascii=False)
+    return json.dumps(value, ensure_ascii=False, default=str)
 
 
 def _parse_gemini_discovery_response(
@@ -663,19 +920,187 @@ def _parse_gemini_enrichment_response(
     response,
     *,
     source_frames: dict[str, SourceRegionFrame] | None = None,
+    batch_number: int | None = None,
+    requested_temporary_ids: list[str] | None = None,
 ) -> tuple[GeminiEnrichmentResult, list[RegionSanitizationEvent]]:
     text = getattr(response, "text", None)
     if not text:
-        raise ValueError("Gemini no devolvio texto JSON para validar GeminiEnrichmentResult.")
+        raise GeminiEnrichmentParseError(
+            "Gemini no devolvio texto JSON para validar GeminiEnrichmentResult.",
+            _enrichment_parse_diagnostic(
+                text or "",
+                batch_number=batch_number,
+                requested_temporary_ids=requested_temporary_ids,
+                response_python_type=None,
+                response_top_level_shape="empty_text",
+                validation_error_summary=[],
+            ),
+        )
 
     try:
-        sanitized_text, region_events = sanitize_enrichment_regions_json(
-            text,
+        payload, shape = _normalize_enrichment_payload(text)
+        region_events = sanitize_enrichment_regions_payload(
+            payload,
             source_frames=source_frames,
         )
-        return GeminiEnrichmentResult.model_validate_json(sanitized_text), region_events
+        return GeminiEnrichmentResult.model_validate(payload), region_events
+    except ValidationError as exc:
+        raise GeminiEnrichmentParseError(
+            "Gemini devolvio JSON invalido para GeminiEnrichmentResult.",
+            _enrichment_parse_diagnostic(
+                text,
+                batch_number=batch_number,
+                requested_temporary_ids=requested_temporary_ids,
+                response_python_type=_parsed_python_type(text),
+                response_top_level_shape=shape if "shape" in locals() else _top_level_shape(text),
+                validation_error_summary=_validation_error_summary(exc),
+            ),
+        ) from exc
     except Exception as exc:
-        raise ValueError("Gemini devolvio JSON invalido para GeminiEnrichmentResult.") from exc
+        raise GeminiEnrichmentParseError(
+            "Gemini devolvio JSON invalido para GeminiEnrichmentResult.",
+            _enrichment_parse_diagnostic(
+                text,
+                batch_number=batch_number,
+                requested_temporary_ids=requested_temporary_ids,
+                response_python_type=_parsed_python_type(text),
+                response_top_level_shape=shape if "shape" in locals() else _top_level_shape(text),
+                validation_error_summary=[],
+            ),
+        ) from exc
+
+
+def _normalize_enrichment_payload(text: str) -> tuple[dict[str, Any], str]:
+    payload_text, fenced = _strip_json_fence(text)
+    payload = json.loads(payload_text)
+    shape = "markdown_fenced_json" if fenced else _shape_for_payload(payload)
+
+    if isinstance(payload, str):
+        shape = f"{shape}->json_string"
+        payload = json.loads(payload)
+        if isinstance(payload, str):
+            raise ValueError("Nested JSON string responses are not accepted.")
+        shape = f"{shape}->{_shape_for_payload(payload)}"
+
+    if isinstance(payload, dict):
+        if "elements" not in payload:
+            raise ValueError("Gemini enrichment response object must include elements.")
+        return payload, shape
+
+    if isinstance(payload, list):
+        if len(payload) == 1 and isinstance(payload[0], dict) and "elements" in payload[0]:
+            return payload[0], f"{shape}->singleton_wrapper"
+        if payload and all(_looks_like_enrichment_element(item) for item in payload):
+            return {"elements": payload}, f"{shape}->direct_elements_list"
+        raise ValueError("Ambiguous or invalid enrichment list response.")
+
+    raise ValueError("Gemini enrichment response must be a JSON object.")
+
+
+def _strip_json_fence(text: str) -> tuple[str, bool]:
+    stripped = text.strip()
+    match = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", stripped, flags=re.DOTALL | re.IGNORECASE)
+    if not match:
+        return text, False
+    return match.group(1), True
+
+
+def _looks_like_enrichment_element(value: object) -> bool:
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("temporary_id"), str)
+        and "elements" not in value
+    )
+
+
+def _enrichment_parse_diagnostic(
+    text: str,
+    *,
+    batch_number: int | None,
+    requested_temporary_ids: list[str] | None,
+    response_python_type: str | None,
+    response_top_level_shape: str,
+    validation_error_summary: list[dict[str, Any]],
+) -> GeminiEnrichmentParseDiagnostic:
+    return GeminiEnrichmentParseDiagnostic(
+        stage="ENRICHMENT",
+        batch_number=batch_number,
+        requested_temporary_ids=list(requested_temporary_ids or []),
+        response_python_type=response_python_type,
+        response_top_level_shape=response_top_level_shape,
+        validation_error_summary=validation_error_summary,
+        raw_text_length=len(text),
+        raw_text_prefix=_safe_text_preview(text[:800]),
+        raw_text_suffix=_safe_text_preview(text[-800:]),
+    )
+
+
+def _parsed_python_type(text: str) -> str | None:
+    try:
+        payload_text, _ = _strip_json_fence(text)
+        payload = json.loads(payload_text)
+    except Exception:
+        return None
+    return type(payload).__name__
+
+
+def _top_level_shape(text: str) -> str:
+    stripped = text.strip()
+    if re.fullmatch(r"```(?:json)?\s*.*?\s*```", stripped, flags=re.DOTALL | re.IGNORECASE):
+        return "markdown_fenced_json"
+    try:
+        payload = json.loads(stripped)
+    except Exception:
+        return "invalid_json"
+    shape = _shape_for_payload(payload)
+    if isinstance(payload, str):
+        try:
+            nested = json.loads(payload)
+        except Exception:
+            return f"{shape}->json_string_invalid"
+        return f"{shape}->json_string->{_shape_for_payload(nested)}"
+    return shape
+
+
+def _shape_for_payload(payload: object) -> str:
+    if isinstance(payload, dict):
+        keys = ",".join(sorted(str(key) for key in payload.keys())[:8])
+        return f"dict[keys={keys}]"
+    if isinstance(payload, list):
+        return f"list[len={len(payload)}]"
+    return type(payload).__name__
+
+
+def _validation_error_summary(exc: ValidationError) -> list[dict[str, Any]]:
+    return [
+        {
+            "loc": list(error.get("loc", ())),
+            "type": error.get("type"),
+            "msg": error.get("msg"),
+        }
+        for error in exc.errors()
+    ]
+
+
+def _safe_text_preview(value: str) -> str:
+    redacted = re.sub(r"AIza[0-9A-Za-z_-]{20,}", "[REDACTED]", value)
+    redacted = re.sub(
+        r"(?i)(api[_-]?key|authorization|bearer)\s*[:=]\s*\S+",
+        r"\1=[REDACTED]",
+        redacted,
+    )
+    return redacted[:800]
+
+
+def _requested_temporary_ids(batch) -> list[str]:
+    return [
+        temporary_id
+        for temporary_id in (
+            getattr(item, "temporary_id", None)
+            for item in batch
+        )
+        if isinstance(temporary_id, str)
+    ]
 
 
 def _apply_usage_metadata(

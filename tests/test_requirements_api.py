@@ -9,7 +9,7 @@ from app.main import app
 from app.models.common import ExtractionStatus, NormalizedValue, TraceableValue
 from app.models.configuration import Configuration
 from app.models.element import Element
-from app.models.evidence import Source
+from app.models.evidence import Evidence, Source
 from app.models.geometry import Geometry
 from app.models.requirement import ExtractionMetadata, Requirement
 from app.models.requirement_extraction import RequirementExtraction
@@ -150,6 +150,91 @@ def test_extract_single_file_reaches_provider_and_serializes_result() -> None:
     assert response.json()["elements"][0]["configuration"]["modulation"] == "OXXO"
     assert response.json()["elements"][0]["geometry"]["normalized_type"] == "L_SHAPE"
     assert response.json()["extraction_metadata"]["source_count"] == 1
+
+
+def test_extract_public_pipeline_trace_uses_full_pipeline_debug_capture(
+    monkeypatch,
+) -> None:
+    provider = FakeExtractionProvider()
+    monkeypatch.setenv("AI2_PUBLIC_PIPELINE_TRACE", "1")
+
+    with _client_with_provider(provider) as client:
+        response = client.post(
+            "/requirements/extract",
+            files=[("files", ("v1.pdf", b"%PDF-1.7\ncontent", "application/pdf"))],
+        )
+
+    assert response.status_code == 200
+    assert provider.calls[0]["debug_capture"] is not None
+
+
+def test_extract_public_response_serializes_final_pipeline_quantity() -> None:
+    class FinalQuantityProvider(FakeExtractionProvider):
+        def extract_with_discovery_from_files(
+            self,
+            files: list[Path],
+            project_id: str | None = None,
+            requirement_id: str | None = None,
+            batch_size: int | None = None,
+            debug_capture=None,
+        ) -> RequirementExtraction:
+            self.calls.append(
+                {
+                    "files": list(files),
+                    "project_id": project_id,
+                    "requirement_id": requirement_id,
+                    "batch_size": batch_size,
+                    "debug_capture": debug_capture,
+                    "existence_during_call": [path.exists() for path in files],
+                }
+            )
+            return RequirementExtraction(
+                requirement=Requirement(
+                    project_id=project_id,
+                    requirement_id=requirement_id,
+                ),
+                elements=[
+                    Element(
+                        id="element-v-10",
+                        reference=TraceableValue(
+                            value="V-10",
+                            status=ExtractionStatus.EXPLICIT,
+                        ),
+                        quantity=TraceableValue(
+                            value=25,
+                            status=ExtractionStatus.EXPLICIT,
+                        ),
+                        evidence_ids=["ev-v-10"],
+                    )
+                ],
+                evidence=[
+                    Evidence(
+                        id="ev-v-10",
+                        source_id="source-1",
+                        type="table",
+                        extracted_text="V-10 CANTIDAD: 5",
+                    )
+                ],
+                extraction_metadata=ExtractionMetadata(
+                    model_provider="test",
+                    model="fake",
+                    source_count=len(files),
+                    element_count=1,
+                ),
+            )
+
+    provider = FinalQuantityProvider()
+    with _client_with_provider(provider) as client:
+        response = client.post(
+            "/requirements/extract",
+            files=[("files", ("v10.pdf", b"%PDF-1.7\ncontent", "application/pdf"))],
+        )
+
+    assert response.status_code == 200
+    element = response.json()["elements"][0]
+    assert element["reference"]["value"] == "V-10"
+    assert element["quantity"]["value"] == 25
+    assert response.json()["evidence"][0]["extracted_text"] == "V-10 CANTIDAD: 5"
 
 
 def test_extract_multi_file_passes_all_files_and_ids_to_full_pipeline() -> None:

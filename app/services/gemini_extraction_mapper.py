@@ -293,12 +293,13 @@ def _map_element(
         ],
         quantity=_map_optional_traceable_field(
             item.quantity,
-            item.status,
-            item.confidence,
+            item.quantity_status or item.status,
+            item.quantity_confidence if item.quantity_confidence is not None else item.confidence,
             evidence_ids,
             missing_fields,
             "quantity",
             "cantidad",
+            notes=item.quantity_notes,
         ),
         configuration=_map_configuration(
             item.configuration,
@@ -484,11 +485,12 @@ def _map_optional_traceable_field(
     evidence_ids: list[str],
     missing_fields: list[str],
     *aliases: str,
+    notes: str | None = None,
 ) -> TraceableValue | None:
     if value in (None, "") and _is_marked_unknown(missing_fields, *aliases):
         return _unknown_traceable(confidence, evidence_ids)
 
-    return _traceable(value, status, confidence, evidence_ids)
+    return _traceable(value, status, confidence, evidence_ids, notes=notes)
 
 
 def _optional_field_status(

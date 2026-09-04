@@ -127,6 +127,9 @@ class GeminiElement(BaseModel):
     opening_direction: str | None = None
     special_features: list[str] = Field(default_factory=list)
     quantity: str | int | float | None = None
+    quantity_status: ExtractionStatus | None = None
+    quantity_confidence: float | None = None
+    quantity_notes: str | None = None
     glass: list[GeminiGlass] = Field(default_factory=list)
     materials: list[GeminiNamedItem] = Field(default_factory=list)
     profiles: list[GeminiNamedItem] = Field(default_factory=list)

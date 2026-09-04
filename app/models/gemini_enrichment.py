@@ -80,6 +80,9 @@ class GeminiElementEnrichment(BaseModel):
     category_raw: str | None = None
     description: str | None = None
     quantity: str | int | float | None = None
+    quantity_status: ExtractionStatus | None = None
+    quantity_confidence: float | None = None
+    quantity_notes: str | None = None
     functional_type_raw: str | None = None
     operation_raw: str | None = None
     panel_count: int | None = Field(default=None, ge=1)

@@ -1,5 +1,7 @@
 ﻿from pathlib import Path
 
+from openpyxl import Workbook
+
 import app.providers.gemini_extraction as provider_module
 from app.models.common import ExtractionStatus
 from app.models.gemini_discovery import GeminiDiscoveryResult, GeminiElementDiscovery
@@ -7,6 +9,7 @@ from app.models.gemini_enrichment import (
     GeminiElementEnrichment,
     GeminiEnrichmentComponent,
     GeminiEnrichmentEvidenceNote,
+    GeminiEnrichmentGlass,
     GeminiEnrichmentMeasurement,
     GeminiEnrichmentResult,
 )
@@ -14,6 +17,7 @@ from app.models.requirement import ExtractionMetadata, Requirement, TokenUsage
 from app.models.requirement_extraction import RequirementExtraction
 from app.providers.gemini_extraction import (
     GeminiEnrichmentDebugCapture,
+    GeminiEnrichmentParseError,
     GeminiExtractionProvider,
     GeminiFullPipelineDebugCapture,
 )
@@ -22,6 +26,9 @@ from app.services.gemini_enrichment_pipeline import (
     build_discovery_batches,
     enrichment_to_gemini_extraction,
     merge_enrichment_batches,
+)
+from app.services.gemini_extraction_mapper import (
+    map_gemini_extraction_to_requirement_extraction,
 )
 from app.services.inventory_reconciliation import (
     CONTEXT_LABEL,
@@ -119,6 +126,22 @@ def _png(tmp_path: Path, name: str = "plano.png", width: int = 1000, height: int
     return path
 
 
+def _xlsx_with_quantity(
+    tmp_path: Path,
+    reference: str,
+    quantity: int,
+    name: str = "cuadro.xlsx",
+) -> Path:
+    path = tmp_path / name
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Cantidades"
+    sheet.append(["REF", "CANTIDAD", "N.P"])
+    sheet.append([reference, quantity, 5])
+    workbook.save(path)
+    return path
+
+
 def _discovery(count: int) -> GeminiDiscoveryResult:
     return GeminiDiscoveryResult(
         elements=[
@@ -160,6 +183,149 @@ def _scope_response_with_sources(
         f'"evidence_source_ids": ["{source_id}"]}}'
         "]}"
     )
+
+
+def test_parse_enrichment_accepts_direct_object() -> None:
+    result, events = provider_module._parse_gemini_enrichment_response(
+        _FakeResponse('{"elements": [{"temporary_id": "d-1", "quantity": 1}]}')
+    )
+
+    assert events == []
+    assert result.elements[0].temporary_id == "d-1"
+    assert result.elements[0].quantity == 1
+
+
+def test_parse_enrichment_accepts_singleton_wrapper_list() -> None:
+    result, _ = provider_module._parse_gemini_enrichment_response(
+        _FakeResponse('[{"elements": [{"temporary_id": "d-1"}]}]')
+    )
+
+    assert [element.temporary_id for element in result.elements] == ["d-1"]
+
+
+def test_parse_enrichment_accepts_direct_elements_list() -> None:
+    result, _ = provider_module._parse_gemini_enrichment_response(
+        _FakeResponse('[{"temporary_id": "d-1"}, {"temporary_id": "d-2"}]')
+    )
+
+    assert [element.temporary_id for element in result.elements] == ["d-1", "d-2"]
+
+
+def test_parse_enrichment_rejects_empty_list_with_diagnostic() -> None:
+    try:
+        provider_module._parse_gemini_enrichment_response(
+            _FakeResponse("[]"),
+            batch_number=2,
+            requested_temporary_ids=["d-1", "d-2"],
+        )
+    except GeminiEnrichmentParseError as exc:
+        diagnostic = exc.diagnostic
+    else:
+        raise AssertionError("Expected GeminiEnrichmentParseError.")
+
+    assert diagnostic.stage == "ENRICHMENT"
+    assert diagnostic.batch_number == 2
+    assert diagnostic.requested_temporary_ids == ["d-1", "d-2"]
+    assert diagnostic.response_top_level_shape == "list[len=0]"
+
+
+def test_parse_enrichment_rejects_multiple_wrapper_list() -> None:
+    try:
+        provider_module._parse_gemini_enrichment_response(
+            _FakeResponse('[{"elements": []}, {"elements": []}]')
+        )
+    except GeminiEnrichmentParseError as exc:
+        diagnostic = exc.diagnostic
+    else:
+        raise AssertionError("Expected GeminiEnrichmentParseError.")
+
+    assert diagnostic.response_top_level_shape == "list[len=2]"
+
+
+def test_parse_enrichment_preserves_validation_error_for_elements_type() -> None:
+    try:
+        provider_module._parse_gemini_enrichment_response(
+            _FakeResponse('{"elements": "not-a-list"}')
+        )
+    except GeminiEnrichmentParseError as exc:
+        errors = exc.diagnostic.validation_error_summary
+    else:
+        raise AssertionError("Expected GeminiEnrichmentParseError.")
+
+    assert errors[0]["loc"] == ["elements"]
+    assert errors[0]["type"] == "list_type"
+
+
+def test_parse_enrichment_preserves_validation_error_field_path() -> None:
+    try:
+        provider_module._parse_gemini_enrichment_response(
+            _FakeResponse('{"elements": [{"temporary_id": "d-1", "panel_count": 0}]}')
+        )
+    except GeminiEnrichmentParseError as exc:
+        errors = exc.diagnostic.validation_error_summary
+    else:
+        raise AssertionError("Expected GeminiEnrichmentParseError.")
+
+    assert errors[0]["loc"] == ["elements", 0, "panel_count"]
+
+
+def test_parse_enrichment_accepts_fenced_json() -> None:
+    result, _ = provider_module._parse_gemini_enrichment_response(
+        _FakeResponse('```json\n{"elements": [{"temporary_id": "d-1"}]}\n```')
+    )
+
+    assert result.elements[0].temporary_id == "d-1"
+
+
+def test_parse_enrichment_rejects_prose_plus_json() -> None:
+    try:
+        provider_module._parse_gemini_enrichment_response(
+            _FakeResponse('Here is your result:\n{"elements": [{"temporary_id": "d-1"}]}')
+        )
+    except GeminiEnrichmentParseError as exc:
+        diagnostic = exc.diagnostic
+    else:
+        raise AssertionError("Expected GeminiEnrichmentParseError.")
+
+    assert diagnostic.response_top_level_shape == "invalid_json"
+
+
+def test_parse_enrichment_accepts_one_layer_json_string() -> None:
+    result, _ = provider_module._parse_gemini_enrichment_response(
+        _FakeResponse('"{\\"elements\\": [{\\"temporary_id\\": \\"d-1\\"}]}"')
+    )
+
+    assert result.elements[0].temporary_id == "d-1"
+
+
+def test_parse_enrichment_rejects_nested_json_string() -> None:
+    try:
+        provider_module._parse_gemini_enrichment_response(
+            _FakeResponse('"\\"{\\\\\\"elements\\\\\\": []}\\""')
+        )
+    except GeminiEnrichmentParseError as exc:
+        diagnostic = exc.diagnostic
+    else:
+        raise AssertionError("Expected GeminiEnrichmentParseError.")
+
+    assert "json_string" in diagnostic.response_top_level_shape
+
+
+def test_parse_enrichment_diagnostic_preview_is_capped_and_redacted() -> None:
+    api_key = "AIza" + ("A" * 36)
+    text = f'{{"foo": "{api_key}", "blob": "' + ("x" * 3000) + '"}'
+
+    try:
+        provider_module._parse_gemini_enrichment_response(_FakeResponse(text))
+    except GeminiEnrichmentParseError as exc:
+        diagnostic = exc.diagnostic
+    else:
+        raise AssertionError("Expected GeminiEnrichmentParseError.")
+
+    assert api_key not in diagnostic.raw_text_prefix
+    assert api_key not in diagnostic.raw_text_suffix
+    assert len(diagnostic.raw_text_prefix) <= 800
+    assert len(diagnostic.raw_text_suffix) <= 800
 
 
 def test_batching_zero_elements() -> None:
@@ -655,6 +821,91 @@ def test_enrichment_to_gemini_extraction_preserves_structured_signals() -> None:
 
 
 
+def test_quantity_metadata_is_field_local_in_final_mapping() -> None:
+    extraction = enrichment_to_gemini_extraction(
+        GeminiDiscoveryResult(),
+        GeminiEnrichmentResult(
+            elements=[
+                GeminiElementEnrichment(
+                    temporary_id="item-1",
+                    reference="V-01",
+                    quantity=1,
+                    quantity_status=ExtractionStatus.INFERRED,
+                    quantity_confidence=0.5,
+                    quantity_notes="NO_SOURCE_GROUNDING_AVAILABLE",
+                    functional_type_raw="PROJECTING",
+                    measurements=[
+                        GeminiEnrichmentMeasurement(
+                            type="width",
+                            raw_label="ANCHO",
+                            value=2.8,
+                            unit="m",
+                            status=ExtractionStatus.EXPLICIT,
+                            confidence=1.0,
+                        ),
+                        GeminiEnrichmentMeasurement(
+                            type="height",
+                            raw_label="ALTO",
+                            value=2.9,
+                            unit="m",
+                            status=ExtractionStatus.EXPLICIT,
+                            confidence=1.0,
+                        ),
+                    ],
+                    geometry_raw="rectangular",
+                    glass=[
+                        GeminiEnrichmentGlass(
+                            type="templado",
+                            thickness="6 mm",
+                            status=ExtractionStatus.EXPLICIT,
+                            confidence=0.95,
+                        )
+                    ],
+                    finish_raw="negro pintura al horno",
+                    components=[
+                        GeminiEnrichmentComponent(
+                            name="nave proyectante",
+                            role="PROJECTING",
+                            status=ExtractionStatus.EXPLICIT,
+                            confidence=0.95,
+                        )
+                    ],
+                    status=ExtractionStatus.EXPLICIT,
+                    confidence=0.95,
+                )
+            ]
+        ),
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+
+    assert element.quantity is not None
+    assert element.quantity.value == 1
+    assert element.quantity.status == ExtractionStatus.INFERRED
+    assert element.quantity.confidence == 0.5
+    assert element.functional_type is not None
+    assert element.functional_type.normalized == "PROJECTING"
+    assert element.functional_type.status == ExtractionStatus.EXPLICIT
+    assert element.functional_type.confidence == 0.95
+    assert element.geometry is not None
+    assert element.geometry.status == ExtractionStatus.EXPLICIT
+    assert element.geometry.confidence == 0.95
+    assert element.measurements[0].status == ExtractionStatus.EXPLICIT
+    assert element.measurements[0].confidence == 1.0
+    assert element.measurements[1].status == ExtractionStatus.EXPLICIT
+    assert element.measurements[1].confidence == 1.0
+    assert element.glass[0].status == ExtractionStatus.EXPLICIT
+    assert element.glass[0].confidence == 0.95
+    assert element.finish is not None
+    assert element.finish.status == ExtractionStatus.EXPLICIT
+    assert element.finish.confidence == 0.95
+    assert element.components[0].role is not None
+    assert element.components[0].role.normalized == "PROJECTING"
+    assert element.components[0].role.status == ExtractionStatus.EXPLICIT
+    assert element.components[0].role.confidence == 0.95
+
+
 def test_inventory_reconciliation_ignores_orphan_reference_tag() -> None:
     enrichment = GeminiEnrichmentResult(
         elements=[GeminiElementEnrichment(temporary_id="tag", reference="PV-07")]
@@ -820,6 +1071,162 @@ def test_inventory_reconciliation_marks_quantity_conflict_without_silent_overwri
     assert element.status == ExtractionStatus.AMBIGUOUS
     assert SOURCE_CONFLICT_REASON in element.missing_or_unknown
     assert SOURCE_CONFLICT_REASON in (extraction.notes or "")
+
+
+def test_inventory_reconciliation_trace_shows_commercial_quantity_beats_repetition_count() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="definition",
+                reference="V-10",
+                quantity=25,
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=2.8, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=2.9, unit="m"),
+                ],
+                evidence=[
+                    GeminiEnrichmentEvidenceNote(
+                        source_id="source-1",
+                        type="table",
+                        text="V-10 CANTIDAD: 25 niveles 5 al 9",
+                    )
+                ],
+                status=ExtractionStatus.EXPLICIT,
+            ),
+            GeminiElementEnrichment(
+                temporary_id="placement",
+                reference="V-10",
+                quantity=5,
+                occurrence_context="niveles 5 al 9",
+                evidence=[
+                    GeminiEnrichmentEvidenceNote(
+                        source_id="source-2",
+                        type="visual",
+                        text="V-10 niveles 5 al 9",
+                    )
+                ],
+                status=ExtractionStatus.EXPLICIT,
+            ),
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+    numeric_trace = build_numeric_resolution_trace(
+        enrichment,
+        stage="pre_reconciliation",
+        source_file_names_by_id={"source-1": "cuadro.pdf", "source-2": "plano.pdf"},
+    )
+
+    assert len(result.elements) == 1
+    assert result.elements[0].quantity == 25
+    assert decisions[0].action == "MERGE"
+    assert decisions[0].winner_temporary_id == "definition"
+    decision_candidates = [
+        (candidate.temporary_id, candidate.quantity, candidate.support_score)
+        for candidate in decisions[0].candidates
+    ]
+    assert decision_candidates == [
+        ("definition", 25, 2),
+        ("placement", 5, 1),
+    ]
+
+    definition_trace = next(
+        element
+        for element in numeric_trace.elements
+        if element.element_temporary_id == "definition"
+    )
+    roles = {
+        (candidate.semantic_role, candidate.value)
+        for candidate in definition_trace.candidates
+    }
+
+    assert ("QUANTITY", 25) in roles
+    assert ("LEVEL_RANGE", "5-9") in roles
+    assert ("REPETITION_COUNT", 5) in roles
+    assert definition_trace.final_quantity.value == 25
+    assert definition_trace.final_quantity.origin_candidate_field_path == "quantity"
+
+
+def test_inventory_reconciliation_trace_shows_definition_beats_placement() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="definition",
+                reference="V-12",
+                quantity=5,
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=1.5, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=2.1, unit="m"),
+                ],
+                evidence=[
+                    GeminiEnrichmentEvidenceNote(
+                        source_id="source-1",
+                        type="table",
+                        text="V-12 CANTIDAD: 5",
+                    )
+                ],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="placement",
+                reference="V-12",
+                quantity=1,
+                occurrence_context="fachada norte",
+                evidence=[
+                    GeminiEnrichmentEvidenceNote(
+                        source_id="source-2",
+                        type="visual",
+                        text="V-12 fachada norte",
+                    )
+                ],
+            ),
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+
+    assert len(result.elements) == 1
+    assert result.elements[0].quantity == 5
+    assert decisions[0].action == "MERGE"
+    assert decisions[0].winner_temporary_id == "definition"
+    decision_candidates = [
+        (candidate.temporary_id, candidate.quantity, candidate.support_score)
+        for candidate in decisions[0].candidates
+    ]
+    assert decision_candidates == [
+        ("definition", 5, 2),
+        ("placement", 1, 1),
+    ]
+
+
+def test_inventory_reconciliation_keeps_single_quantity_one_when_no_conflict() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="single",
+                reference="V-11",
+                quantity=1,
+                measurements=[GeminiEnrichmentMeasurement(type="width", value=1.1, unit="m")],
+                evidence=[
+                    GeminiEnrichmentEvidenceNote(
+                        source_id="source-1",
+                        type="table",
+                        text="V-11 CANTIDAD: 1",
+                    )
+                ],
+            )
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+    trace = build_numeric_resolution_trace(
+        enrichment,
+        stage="pre_reconciliation",
+        source_file_names_by_id={"source-1": "cuadro.pdf"},
+    )
+
+    assert result.elements[0].quantity == 1
+    assert decisions[0].action == "KEEP"
+    assert trace.elements[0].final_quantity.value == 1
 
 
 def test_inventory_reconciliation_keeps_context_labels_as_distinct_occurrences() -> None:
@@ -1194,6 +1601,39 @@ def test_full_pipeline_debug_capture_records_numeric_trace_without_changing_quan
         for candidate in debug_capture.numeric_trace.elements[0].candidates
     } >= {"QUANTITY", "LEVEL"}
     assert debug_capture.reconciliation_decisions is not None
+
+
+def test_full_pipeline_applies_source_grounded_quantity_before_mapping(
+    tmp_path: Path,
+) -> None:
+    provider = _provider_with_responses(
+        [
+            _FakeResponse('{"elements": [{"temporary_id": "d-1", "reference": "V-10"}]}'),
+            _scope_response(("d-1", "in_scope_full")),
+            _FakeResponse(
+                '{"elements": ['
+                '{"temporary_id": "d-1", "reference": "V-10", "quantity": 5, '
+                '"status": "explicit", '
+                '"evidence": [{"source_id": "source-1", "type": "table", '
+                '"text": "V-10 CANTIDAD: 25 NIVELES 5 AL 9"}]}'
+                "]}",
+            ),
+        ]
+    )
+    debug_capture = GeminiFullPipelineDebugCapture()
+
+    result = provider.extract_with_discovery_from_files(
+        [_xlsx_with_quantity(tmp_path, "V-10", 25)],
+        debug_capture=debug_capture,
+    )
+
+    assert result.elements[0].quantity is not None
+    assert result.elements[0].quantity.value == 25
+    assert result.elements[0].quantity.status == ExtractionStatus.EXPLICIT
+    assert debug_capture.enrichment is not None
+    assert debug_capture.enrichment.elements[0].quantity == 25
+    assert debug_capture.enrichment_debug is not None
+    assert debug_capture.enrichment_debug.quantity_grounding_decisions[0].action == "REPLACE"
 
 
 def test_full_pipeline_debug_capture_records_inventory_stage_counts(
