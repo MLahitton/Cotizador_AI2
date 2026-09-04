@@ -156,6 +156,191 @@ def test_interprets_commercial_line_requirement() -> None:
     assert intent.requestedValue == "premium"
 
 
+def test_interprets_tempered_glass_attributes() -> None:
+    intent = _interpret("Ponle vidrio templado de 6 mm", scope="ITEM")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_GLASS"
+    assert intent.requestedValue == "vidrio templado de 6 mm"
+    assert intent.targetReference is None
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.glass is not None
+    assert intent.requestedAttributes.glass.composition == "TEMPERED"
+    assert intent.requestedAttributes.glass.outerThicknessMm == 6
+
+
+def test_interprets_laminated_glass_attributes() -> None:
+    intent = _interpret("Quiero laminado 4+4", scope="ITEM")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_GLASS"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.glass is not None
+    assert intent.requestedAttributes.glass.composition == "LAMINATED"
+    assert intent.requestedAttributes.glass.outerThicknessMm == 4
+    assert intent.requestedAttributes.glass.innerThicknessMm == 4
+
+
+def test_interprets_tempered_black_glass_attributes() -> None:
+    intent = _interpret("pon templado de 10 mm negro", scope="ITEM")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_GLASS"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.glass is not None
+    assert intent.requestedAttributes.glass.composition == "TEMPERED"
+    assert intent.requestedAttributes.glass.outerThicknessMm == 10
+    assert intent.requestedAttributes.glass.color == "BLACK"
+
+
+def test_interprets_monolithic_tempered_glass_attributes() -> None:
+    intent = _interpret("Cambia a vidrio monolítico templado de 6 mm", scope="ITEM")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_GLASS"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.glass is not None
+    assert intent.requestedAttributes.glass.family == "MONOLITHIC"
+    assert intent.requestedAttributes.glass.composition == "TEMPERED"
+    assert intent.requestedAttributes.glass.outerThicknessMm == 6
+    assert intent.classificationReason == "GLASS_FAMILY_EXTRACTED"
+
+
+def test_interprets_laminated_family_and_pair_thickness() -> None:
+    intent = _interpret("Pon laminado 4+4", scope="ITEM")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_GLASS"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.glass is not None
+    assert intent.requestedAttributes.glass.family == "LAMINATED"
+    assert intent.requestedAttributes.glass.outerThicknessMm == 4
+    assert intent.requestedAttributes.glass.innerThicknessMm == 4
+
+
+def test_interprets_laminated_tempered_family_and_composition() -> None:
+    intent = _interpret("Pon laminado templado 6+6", scope="ITEM")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_GLASS"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.glass is not None
+    assert intent.requestedAttributes.glass.family == "LAMINATED"
+    assert intent.requestedAttributes.glass.composition == "TEMPERED"
+    assert intent.requestedAttributes.glass.outerThicknessMm == 6
+    assert intent.requestedAttributes.glass.innerThicknessMm == 6
+
+
+def test_interprets_igu_family_and_chamber_thickness() -> None:
+    intent = _interpret("Pon doble vidrio con cámara de 12 mm", scope="ITEM")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_GLASS"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.glass is not None
+    assert intent.requestedAttributes.glass.family == "IGU"
+    assert intent.requestedAttributes.glass.chamberThicknessMm == 12
+
+
+def test_interprets_sliding_door_system_attributes() -> None:
+    intent = _interpret("Cambia PV-5 a puerta corrediza Venecia Monaco")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.targetReference == "PV-5"
+    assert intent.requestedValue == "puerta corrediza Venecia Monaco"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.system is not None
+    assert intent.requestedAttributes.system.functionalType == "SLIDING_DOOR"
+    assert intent.requestedAttributes.system.operation == "SLIDING"
+    assert intent.requestedAttributes.system.commercialName == "VENECIA MONACO"
+    assert intent.requestedAttributes.system.family == "VENECIA MONACO"
+
+
+def test_interprets_sliding_window_system_attributes() -> None:
+    intent = _interpret("Pon una ventana corrediza Monza")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.system is not None
+    assert intent.requestedAttributes.system.functionalType == "SLIDING_WINDOW"
+    assert intent.requestedAttributes.system.operation == "SLIDING"
+    assert intent.requestedAttributes.system.commercialName == "MONZA"
+
+
+def test_interprets_swing_door_system_attributes() -> None:
+    intent = _interpret("Usa puerta batiente 3890")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.system is not None
+    assert intent.requestedAttributes.system.functionalType == "SWING_DOOR"
+    assert intent.requestedAttributes.system.operation == "CASEMENT"
+    assert intent.requestedAttributes.system.commercialName == "3890"
+
+
+def test_interprets_fixed_system_attributes() -> None:
+    intent = _interpret("Pon un fijo Venecia Fermo")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.system is not None
+    assert intent.requestedAttributes.system.functionalType == "FIXED"
+    assert intent.requestedAttributes.system.operation == "FIXED"
+    assert intent.requestedAttributes.system.commercialName == "VENECIA FERMO"
+
+
+def test_commercial_name_without_function_does_not_invent_function() -> None:
+    intent = _interpret("Cambia a Venecia Monaco")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.system is not None
+    assert intent.requestedAttributes.system.functionalType is None
+    assert intent.requestedAttributes.system.operation is None
+    assert intent.requestedAttributes.system.commercialName == "VENECIA MONACO"
+
+
+def test_interprets_finish_attributes_black_matte() -> None:
+    intent = _interpret("Ponlo negro mate", scope="ITEM")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_FINISH"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.finish is not None
+    assert intent.requestedAttributes.finish.color == "BLACK"
+    assert intent.requestedAttributes.finish.texture == "MATTE"
+
+
+def test_interprets_finish_attributes_inox() -> None:
+    intent = _interpret("Quiero acabado inox", scope="ITEM")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_FINISH"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.finish is not None
+    assert intent.requestedAttributes.finish.material == "STAINLESS_STEEL"
+    assert intent.requestedAttributes.finish.normalizedType == "STAINLESS_STEEL"
+
+
+def test_glass_informational_message_is_not_action() -> None:
+    intent = _interpret("Que es un vidrio templado de 6 mm?", scope="ITEM")
+
+    assert intent.isAction is False
+    assert intent.actionType == "UNKNOWN"
+
+
+def test_glass_family_informational_message_is_not_action() -> None:
+    intent = _interpret("Qué diferencia hay entre monolítico y laminado?", scope="ITEM")
+
+    assert intent.isAction is False
+    assert intent.actionType == "UNKNOWN"
+
+
 def test_informational_chat_is_not_action() -> None:
     intent = _interpret("que sistema tiene este item?", scope="ITEM")
 
@@ -301,6 +486,113 @@ def test_pending_glass_follow_up_completes_value() -> None:
     assert intent.requestedValue == "8 mm"
 
 
+def test_pending_glass_follow_up_populates_attributes() -> None:
+    intent = _interpret(
+        "templado de 6 mm",
+        context=_pending_context(action_type="CHANGE_GLASS", target_reference="V-01"),
+    )
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_GLASS"
+    assert intent.requestedValue == "templado de 6 mm"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.glass is not None
+    assert intent.requestedAttributes.glass.composition == "TEMPERED"
+    assert intent.requestedAttributes.glass.outerThicknessMm == 6
+
+
+def test_pending_glass_follow_up_enriches_family_without_losing_attributes() -> None:
+    intent = _interpret(
+        "monolítico",
+        context=_pending_context(
+            action_type="CHANGE_GLASS",
+            target_reference="PV-1",
+            requested_value="templado de 6 mm",
+            requested_attributes={
+                "glass": {
+                    "composition": "TEMPERED",
+                    "outerThicknessMm": 6,
+                }
+            },
+        ),
+    )
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_GLASS"
+    assert intent.requestedValue == "monolítico"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.glass is not None
+    assert intent.requestedAttributes.glass.family == "MONOLITHIC"
+    assert intent.requestedAttributes.glass.composition == "TEMPERED"
+    assert intent.requestedAttributes.glass.outerThicknessMm == 6
+    assert intent.classificationReason == "PENDING_GLASS_ATTRIBUTES_ENRICHED"
+
+
+def test_pending_glass_follow_up_enriches_monolithic_composition_phrase() -> None:
+    intent = _interpret(
+        "Que sea Composicion Monolitico templado 6 MM INC",
+        context=_pending_context(
+            action_type="CHANGE_GLASS",
+            target_reference="PV-1",
+            requested_value="templado de 6 mm",
+            requested_attributes={
+                "glass": {
+                    "composition": "TEMPERED",
+                    "outerThicknessMm": 6,
+                }
+            },
+        ),
+    )
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_GLASS"
+    assert intent.requestedValue == "Composicion Monolitico templado 6 MM INC"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.glass is not None
+    assert intent.requestedAttributes.glass.family == "MONOLITHIC"
+    assert intent.requestedAttributes.glass.composition == "TEMPERED"
+    assert intent.requestedAttributes.glass.outerThicknessMm == 6
+    assert intent.requiresClarification is False
+
+
+def test_pending_glass_follow_up_explicit_laminated_overrides_monolithic() -> None:
+    intent = _interpret(
+        "mejor laminado 4+4",
+        context=_pending_context(
+            action_type="CHANGE_GLASS",
+            target_reference="PV-1",
+            requested_value="monolitico",
+            requested_attributes={
+                "glass": {
+                    "family": "MONOLITHIC",
+                }
+            },
+        ),
+    )
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_GLASS"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.glass is not None
+    assert intent.requestedAttributes.glass.family == "LAMINATED"
+    assert intent.requestedAttributes.glass.outerThicknessMm == 4
+    assert intent.requestedAttributes.glass.innerThicknessMm == 4
+
+
+def test_pending_system_follow_up_populates_attributes() -> None:
+    intent = _interpret(
+        "puerta corrediza Venecia Monaco",
+        context=_pending_context(action_type="CHANGE_SYSTEM", target_reference="PV-5"),
+    )
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.system is not None
+    assert intent.requestedAttributes.system.functionalType == "SLIDING_DOOR"
+    assert intent.requestedAttributes.system.commercialName == "VENECIA MONACO"
+
+
 def test_pending_quantity_follow_up_completes_quantity() -> None:
     intent = _interpret(
         "3 unidades",
@@ -399,6 +691,153 @@ def test_pending_action_ambiguous_option_without_options_requires_clarification(
     assert intent.classificationReason == "PENDING_ACTION_FOLLOWUP_AMBIGUOUS"
 
 
+def test_pending_glass_target_reference_follow_up_preserves_value_and_attributes() -> None:
+    requested_attributes = {
+        "glass": {
+            "composition": "TEMPERED",
+            "outerThicknessMm": 6,
+        }
+    }
+
+    intent = _interpret(
+        "PV-1",
+        context=_pending_context(
+            action_type="CHANGE_GLASS",
+            target_reference=None,
+            requested_value="COMPOSICION MONOLITICO TEMPLADO 6 MM INC.",
+            requested_attributes=requested_attributes,
+            clarification_expected="targetReference",
+            available_options=[
+                {"reference": "PV-1"},
+                {"reference": "PV-2"},
+                {"reference": "PV-3a"},
+            ],
+        ),
+    )
+
+    assert intent.isAction is True
+    assert intent.isFollowUpToPendingAction is True
+    assert intent.actionType == "CHANGE_GLASS"
+    assert intent.targetReference == "PV-1"
+    assert intent.requestedValue == "COMPOSICION MONOLITICO TEMPLADO 6 MM INC."
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.glass is not None
+    assert intent.requestedAttributes.glass.composition == "TEMPERED"
+    assert intent.requestedAttributes.glass.outerThicknessMm == 6
+    assert intent.requiresClarification is False
+    assert intent.classificationReason == "PENDING_ACTION_TARGET_RESOLVED"
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_target"),
+    [
+        ("V-3", "V-3"),
+        ("V1", "V-1"),
+        ("pv-1", "PV-1"),
+        ("C-2a", "C-2a"),
+    ],
+)
+def test_pending_target_reference_accepts_reference_formats(
+    message: str,
+    expected_target: str,
+) -> None:
+    intent = _interpret(
+        message,
+        context=_pending_context(
+            action_type="CHANGE_SYSTEM",
+            target_reference=None,
+            requested_value="S50",
+            clarification_expected="targetReference",
+        ),
+    )
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.targetReference == expected_target
+    assert intent.requestedValue == "S50"
+
+
+def test_pending_target_reference_resolves_ordinal_available_option() -> None:
+    intent = _interpret(
+        "la segunda",
+        context=_pending_context(
+            action_type="CHANGE_FINISH",
+            target_reference=None,
+            requested_value="negro mate",
+            clarification_expected="targetReference",
+            available_options=[
+                {"reference": "PV-1"},
+                {"reference": "PV-2"},
+                {"reference": "PV-3a"},
+            ],
+        ),
+    )
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_FINISH"
+    assert intent.targetReference == "PV-2"
+    assert intent.requestedValue == "negro mate"
+    assert intent.classificationReason == "PENDING_ACTION_TARGET_RESOLVED"
+
+
+def test_pending_target_reference_rejects_unavailable_target_option() -> None:
+    intent = _interpret(
+        "PV-99",
+        context=_pending_context(
+            action_type="CHANGE_GLASS",
+            target_reference=None,
+            requested_value="templado de 6 mm",
+            clarification_expected="targetReference",
+            available_options=[
+                {"reference": "PV-1"},
+                {"reference": "PV-2"},
+            ],
+        ),
+    )
+
+    assert intent.isAction is False
+    assert intent.isFollowUpToPendingAction is True
+    assert intent.actionType == "CHANGE_GLASS"
+    assert intent.targetReference is None
+    assert intent.requiresClarification is True
+    assert intent.classificationReason == "PENDING_ACTION_TARGET_AMBIGUOUS"
+
+
+def test_pending_target_reference_informational_message_does_not_complete() -> None:
+    intent = _interpret(
+        "Cuanto cuesta V-3?",
+        context=_pending_context(
+            action_type="CHANGE_GLASS",
+            target_reference=None,
+            requested_value="templado de 6 mm",
+            clarification_expected="targetReference",
+        ),
+    )
+
+    assert intent.isAction is False
+    assert intent.actionType == "UNKNOWN"
+    assert intent.isFollowUpToPendingAction is False
+    assert intent.classificationReason == "INFORMATIONAL_GUARD"
+
+
+def test_pending_target_reference_new_explicit_action_overrides_pending() -> None:
+    intent = _interpret(
+        "Cambia V-4 a S50",
+        context=_pending_context(
+            action_type="CHANGE_GLASS",
+            target_reference=None,
+            requested_value="templado de 6 mm",
+            clarification_expected="targetReference",
+        ),
+    )
+
+    assert intent.isAction is True
+    assert intent.isFollowUpToPendingAction is False
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.targetReference == "V-4"
+    assert intent.requestedValue == "S50"
+
+
 def test_chat_action_endpoint_returns_intent() -> None:
     with TestClient(app) as client:
         response = client.post(
@@ -483,6 +922,8 @@ def _pending_context(
     target_reference: str | None = "V-01",
     target_item_id: str | None = None,
     requested_value: str | None = None,
+    requested_attributes: dict | None = None,
+    clarification_expected: str = "requestedValue",
     available_options: list[dict] | None = None,
 ) -> dict:
     return {
@@ -492,7 +933,8 @@ def _pending_context(
             "targetTechnicalProposalItemId": target_item_id,
             "targetReference": target_reference,
             "requestedValue": requested_value,
-            "clarificationExpected": "requestedValue",
+            "requestedAttributes": requested_attributes,
+            "clarificationExpected": clarification_expected,
             "clarificationReason": "SYSTEM_AMBIGUOUS",
             "availableOptions": available_options or [],
         }

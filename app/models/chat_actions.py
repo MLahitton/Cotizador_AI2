@@ -24,6 +24,41 @@ class ChatActionInterpretRequest(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
 
 
+class ChatGlassRequestedAttributes(BaseModel):
+    family: str | None = None
+    composition: str | None = None
+    treatment: str | None = None
+    outerThicknessMm: float | None = Field(default=None, gt=0)
+    innerThicknessMm: float | None = Field(default=None, gt=0)
+    pvbThicknessMm: float | None = Field(default=None, gt=0)
+    chamberThicknessMm: float | None = Field(default=None, gt=0)
+    color: str | None = None
+    pattern: str | None = None
+
+
+class ChatSystemRequestedAttributes(BaseModel):
+    functionalType: str | None = None
+    operation: str | None = None
+    commercialName: str | None = None
+    family: str | None = None
+    variant: str | None = None
+    commercialLine: str | None = None
+
+
+class ChatFinishRequestedAttributes(BaseModel):
+    color: str | None = None
+    texture: str | None = None
+    process: str | None = None
+    material: str | None = None
+    normalizedType: str | None = None
+
+
+class ChatRequestedAttributes(BaseModel):
+    glass: ChatGlassRequestedAttributes | None = None
+    system: ChatSystemRequestedAttributes | None = None
+    finish: ChatFinishRequestedAttributes | None = None
+
+
 class ChatActionIntent(BaseModel):
     isAction: bool
     actionType: ChatActionType
@@ -33,6 +68,7 @@ class ChatActionIntent(BaseModel):
     requestedQuantity: int | None = Field(default=None, gt=0)
     requestedWidthMm: int | None = Field(default=None, gt=0)
     requestedHeightMm: int | None = Field(default=None, gt=0)
+    requestedAttributes: ChatRequestedAttributes | None = None
     confidence: float = Field(ge=0.0, le=1.0)
     requiresClarification: bool
     clarificationReason: str | None = None
