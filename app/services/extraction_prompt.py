@@ -193,6 +193,13 @@ Instrucciones:
 - Analiza todas las fuentes para obtener informacion del discovery correspondiente.
 - Cuando una afirmacion tenga trazabilidad clara, agregala en evidence con source_id,
   text, page_number, sheet_name, cell_range, region o visual_description segun aplique.
+- region usa coordenadas normalizadas relativas a la imagen/pagina visible:
+  x, y, width y height deben estar entre 0 y 1; x/y son esquina superior izquierda;
+  width/height son tamano del recorte, no coordenadas finales; x + width <= 1 y
+  y + height <= 1.
+- No uses pixeles, puntos PDF, porcentajes 0-100, grillas 0-1000 ni [x1,y1,x2,y2]
+  dentro de region. Si solo conoces coordenadas absolutas o no puedes normalizarlas con
+  certeza, deja region=null y conserva text/visual_description/page_number.
 - Para evidencia visual de PDF, incluye page_number real y region normalizada cuando exista.
 - Para evidencia visual de imagen, incluye region normalizada cuando exista y no inventes
   page_number.
@@ -217,6 +224,21 @@ Instrucciones:
   level/ubicacion, width, height, area, quantity, notas, vidrio, acabado y textos raw; NO
   autorizan por si solas functional_type_raw, operation_raw, panel_count,
   movable_panel_count, fixed_panel_count, modulation_raw, assembly_type ni components.
+- Quantity debe ser la cantidad comercial del item actual y requiere asociacion clara
+  label-value, columna, celda, bloque visual o proximidad estructural con ese reference.
+- Etiquetas validas de cantidad pueden incluir CANTIDAD, CANT., CNT, QTY, UNIDADES,
+  UND o CANTIDAD TOTAL. Usa el valor asociado a esa etiqueta/columna del item actual.
+- No uses numeros de nivel, piso, rango de niveles, cotas, item number, reference number,
+  dimensiones, area, espesor, cantidad de cuerpos, panel_count, section_count ni
+  repetition_count como quantity comercial.
+- Repetition_count por niveles repetidos describe ocurrencias/contexto; no reemplaza una
+  cantidad explicita claramente asociada al item.
+- Si hay varios numeros cercanos y no puedes asociar con seguridad el label/celda/bloque
+  de cantidad, deja quantity null o ambiguous/unknown y conserva evidencia_notes.
+- La evidencia de quantity debe citar texto/celda/region real de la fuente; no reconstruyas
+  frases como CANTIDAD: X si ese label-value no aparece asi en el documento.
+- Si texto nativo y estructura visual discrepan sobre quantity, conserva el conflicto y
+  baja confidence; no marques explicit/high-confidence sin soporte claro.
 - Para functional_type_raw, operation_raw, panel counts, modulation, assembly_type y
   components usa evidencia visual del dibujo asociado al mismo reference como fuente
   primaria cuando exista. La evidencia debe describir el dibujo, simbolo, paneles,

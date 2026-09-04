@@ -1526,6 +1526,209 @@ def test_mapper_keeps_visual_evidence_as_operation_support() -> None:
     assert "visual_functional_evidence" not in element.missing_fields
 
 
+def test_mapper_preserves_quantity_level_dimensions_and_component_count_roles() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="v-12",
+                reference="V-12",
+                quantity=1,
+                measurements=[
+                    GeminiMeasurement(type="width", value=2800, unit="mm"),
+                    GeminiMeasurement(type="height", value=3600, unit="mm"),
+                ],
+                panel_count=5,
+                occurrences=[
+                    GeminiOccurrence(
+                        level="10",
+                        evidence="NIVEL 10",
+                        status=ExtractionStatus.EXPLICIT,
+                    )
+                ],
+                evidence_items=[
+                    GeminiEvidence(
+                        source_id="source-1",
+                        type="visual",
+                        text="V-12 2800 x 3600 5 cuerpos CANTIDAD: 1 NIVEL 10",
+                        visual_description="Dibujo V-12 muestra cinco cuerpos.",
+                    )
+                ],
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(
+        extraction,
+        default_source_id=None,
+        allowed_source_ids=["source-1"],
+    )
+    element = result.elements[0]
+
+    assert element.reference is not None
+    assert element.reference.value == "V-12"
+    assert element.quantity is not None
+    assert element.quantity.value == 1
+    assert [measurement.value for measurement in element.measurements] == [2800, 3600]
+    assert element.configuration is not None
+    assert element.configuration.panel_count is not None
+    assert element.configuration.panel_count.value == 5
+    assert element.occurrences[0].level is not None
+    assert element.occurrences[0].level.value == "10"
+
+
+def test_mapper_table_row_preserves_quantity_and_dimensions_but_not_panel_count() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="v-12",
+                reference="V-12",
+                quantity=1,
+                measurements=[
+                    GeminiMeasurement(type="width", value=2800, unit="mm"),
+                    GeminiMeasurement(type="height", value=3600, unit="mm"),
+                ],
+                panel_count=5,
+                evidence_items=[
+                    GeminiEvidence(
+                        source_id="source-1",
+                        type="table",
+                        text="V-12 2800 x 3600 5 cuerpos CANTIDAD: 1",
+                    )
+                ],
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(
+        extraction,
+        default_source_id=None,
+        allowed_source_ids=["source-1"],
+    )
+    element = result.elements[0]
+
+    assert element.quantity is not None
+    assert element.quantity.value == 1
+    assert [measurement.value for measurement in element.measurements] == [2800, 3600]
+    assert element.configuration is not None
+    assert element.configuration.panel_count is not None
+    assert element.configuration.panel_count.value is None
+    assert element.configuration.panel_count.status == ExtractionStatus.UNKNOWN
+    assert "visual_functional_evidence" in element.missing_fields
+
+
+def test_mapper_preserves_explicit_quantity_over_nearby_floor_number() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="pv-03",
+                reference="PV-03",
+                quantity=3,
+                occurrences=[
+                    GeminiOccurrence(
+                        level="8",
+                        evidence="PISO 8",
+                        status=ExtractionStatus.EXPLICIT,
+                    )
+                ],
+                evidence_items=[
+                    GeminiEvidence(
+                        source_id="source-1",
+                        type="table",
+                        text="PV-03 CANTIDAD: 3 PISO 8",
+                    )
+                ],
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(
+        extraction,
+        default_source_id=None,
+        allowed_source_ids=["source-1"],
+    )
+    element = result.elements[0]
+
+    assert element.quantity is not None
+    assert element.quantity.value == 3
+    assert element.quantity.status == ExtractionStatus.EXPLICIT
+    assert element.occurrences[0].level is not None
+    assert element.occurrences[0].level.value == "8"
+    assert element.occurrences[0].level.status == ExtractionStatus.EXPLICIT
+
+
+def test_mapper_preserves_component_count_apart_from_commercial_quantity() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="v-05",
+                reference="V-05",
+                quantity=1,
+                panel_count=5,
+                configuration="5 cuerpos",
+                evidence_items=[
+                    GeminiEvidence(
+                        source_id="source-1",
+                        type="visual",
+                        text="V-05 5 cuerpos CANTIDAD: 1",
+                        visual_description="Dibujo V-05 muestra cinco cuerpos.",
+                    )
+                ],
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(
+        extraction,
+        default_source_id=None,
+        allowed_source_ids=["source-1"],
+    )
+    element = result.elements[0]
+
+    assert element.quantity is not None
+    assert element.quantity.value == 1
+    assert element.configuration is not None
+    assert element.configuration.panel_count is not None
+    assert element.configuration.panel_count.value == 5
+    assert element.configuration.raw_description == "5 cuerpos"
+
+
+def test_mapper_keeps_repetition_context_from_overwriting_direct_quantity() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="v-20",
+                reference="V-20",
+                quantity=1,
+                occurrences=[
+                    GeminiOccurrence(
+                        level="niveles 5 al 9",
+                        quantity=5,
+                        evidence="Se repite desde niveles 5 al 9",
+                        status=ExtractionStatus.INFERRED,
+                    )
+                ],
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+
+    assert element.quantity is not None
+    assert element.quantity.value == 1
+    assert element.quantity.status == ExtractionStatus.EXPLICIT
+    assert element.occurrences[0].quantity is not None
+    assert element.occurrences[0].quantity.value == 5
+    assert element.occurrences[0].quantity.status == ExtractionStatus.INFERRED
+    assert element.occurrences[0].level is not None
+    assert element.occurrences[0].level.value == "niveles 5 al 9"
+
+
 def test_enrichment_prompt_requires_visual_support_for_functional_signals() -> None:
     assert "filas de tabla/cuadro textual" in ELEMENT_ENRICHMENT_PROMPT
     assert "NO" in ELEMENT_ENRICHMENT_PROMPT
@@ -1537,3 +1740,30 @@ def test_enrichment_prompt_requires_visual_support_for_functional_signals() -> N
     assert "No uses inferencias globales" in ELEMENT_ENRICHMENT_PROMPT
     assert "Backend selecciona el" in ELEMENT_ENRICHMENT_PROMPT
     assert "sistema final" in ELEMENT_ENRICHMENT_PROMPT
+
+
+def test_enrichment_prompt_requires_quantity_label_value_association() -> None:
+    assert "Quantity debe ser la cantidad comercial del item actual" in ELEMENT_ENRICHMENT_PROMPT
+    assert "label-value, columna, celda, bloque visual" in ELEMENT_ENRICHMENT_PROMPT
+    assert "CANTIDAD, CANT., CNT, QTY, UNIDADES" in ELEMENT_ENRICHMENT_PROMPT
+    assert "No uses numeros de nivel, piso, rango de niveles" in ELEMENT_ENRICHMENT_PROMPT
+    assert "cantidad de cuerpos, panel_count, section_count" in ELEMENT_ENRICHMENT_PROMPT
+    assert "Repetition_count por niveles repetidos" in ELEMENT_ENRICHMENT_PROMPT
+    assert "no reemplaza una" in ELEMENT_ENRICHMENT_PROMPT
+    assert "La evidencia de quantity debe citar texto/celda/region real" in (
+        ELEMENT_ENRICHMENT_PROMPT
+    )
+    assert "no reconstruyas" in ELEMENT_ENRICHMENT_PROMPT
+    assert "Si texto nativo y estructura visual discrepan" in ELEMENT_ENRICHMENT_PROMPT
+
+
+def test_enrichment_prompt_defines_region_coordinate_contract() -> None:
+    assert "region usa coordenadas normalizadas" in ELEMENT_ENRICHMENT_PROMPT
+    assert "x, y, width y height deben estar entre 0 y 1" in ELEMENT_ENRICHMENT_PROMPT
+    assert "x/y son esquina superior izquierda" in ELEMENT_ENRICHMENT_PROMPT
+    assert "width/height son tamano del recorte, no coordenadas finales" in (
+        ELEMENT_ENRICHMENT_PROMPT
+    )
+    assert "x + width <= 1" in ELEMENT_ENRICHMENT_PROMPT
+    assert "No uses pixeles, puntos PDF, porcentajes 0-100" in ELEMENT_ENRICHMENT_PROMPT
+    assert "deja region=null" in ELEMENT_ENRICHMENT_PROMPT

@@ -1,5 +1,6 @@
 import logging
 import re
+import struct
 import time
 import zipfile
 from dataclasses import dataclass
@@ -34,6 +35,19 @@ from app.services.gemini_scope_pipeline import (
     merge_scope_with_discovery,
     scope_lookup,
     select_discoveries_for_enrichment,
+)
+from app.services.inventory_reconciliation import InventoryDecision, reconcile_inventory_candidates
+from app.services.inventory_trace import (
+    InventoryDebugTrace,
+    discovery_inventory_elements,
+    enrichment_inventory_elements,
+    final_inventory_elements,
+)
+from app.services.numeric_trace import NumericResolutionTrace, build_numeric_resolution_trace
+from app.services.region_sanitizer import (
+    RegionSanitizationEvent,
+    SourceRegionFrame,
+    sanitize_enrichment_regions_json,
 )
 
 logger = logging.getLogger(__name__)
@@ -194,6 +208,8 @@ class GeminiExtractionProvider:
             )
             discovery_debug.model = self._provider.model
             discovery_debug.token_usage = _extract_token_usage(discovery_response)
+            inventory_trace = InventoryDebugTrace()
+            inventory_trace.add_stage("DISCOVERY", discovery_inventory_elements(discovery))
 
             scope_debug = GeminiScopeDebugCapture()
             scope_started = time.perf_counter()
@@ -263,10 +279,38 @@ class GeminiExtractionProvider:
             )
 
             if debug_capture is not None:
+                reconciled_enrichment, reconciliation_decisions = reconcile_inventory_candidates(
+                    enrichment
+                )
+                if enrichment_debug.inventory_trace is not None:
+                    inventory_trace.stages.extend(enrichment_debug.inventory_trace.stages)
                 debug_capture.discovery = discovery
                 debug_capture.scope = scope
                 debug_capture.enrichment = enrichment
                 debug_capture.gemini_extraction = gemini_extraction
+                inventory_trace.add_stage(
+                    "MERGED_ENRICHMENT",
+                    enrichment_inventory_elements(enrichment),
+                )
+                inventory_trace.add_stage(
+                    "PRE_RECONCILIATION",
+                    enrichment_inventory_elements(enrichment),
+                )
+                inventory_trace.add_stage(
+                    "POST_RECONCILIATION",
+                    enrichment_inventory_elements(reconciled_enrichment),
+                )
+                inventory_trace.add_stage(
+                    "FINAL_REQUIREMENT_EXTRACTION",
+                    final_inventory_elements(extraction),
+                )
+                debug_capture.inventory_trace = inventory_trace
+                debug_capture.numeric_trace = build_numeric_resolution_trace(
+                    enrichment,
+                    stage="merged_enrichment_before_reconciliation",
+                    source_file_names_by_id=_source_file_names_by_id(context.file_specs),
+                )
+                debug_capture.reconciliation_decisions = reconciliation_decisions
                 debug_capture.discovery_debug = discovery_debug
                 debug_capture.scope_debug = scope_debug
                 debug_capture.enrichment_debug = enrichment_debug
@@ -355,7 +399,10 @@ class GeminiExtractionProvider:
                     context.file_specs,
                 )
             )
-            batch_result = _parse_gemini_enrichment_response(response)
+            batch_result, region_events = _parse_gemini_enrichment_response(
+                response,
+                source_frames=_source_region_frames(context.file_specs),
+            )
             usage = _extract_token_usage(response)
             batch_results.append(batch_result)
             batch_usage.append(usage)
@@ -364,11 +411,28 @@ class GeminiExtractionProvider:
                 debug_capture.raw_responses.append(getattr(response, "text", None))
                 debug_capture.batch_results.append(batch_result)
                 debug_capture.batch_usage.append(usage)
+                debug_capture.region_sanitization_events.extend(region_events)
+                debug_capture.inventory_trace.add_stage(
+                    f"ENRICHMENT_BATCH_{len(debug_capture.batch_results)}",
+                    enrichment_inventory_elements(batch_result),
+                )
+                debug_capture.batch_numeric_traces.append(
+                    build_numeric_resolution_trace(
+                        batch_result,
+                        stage=f"enrichment_batch_{len(debug_capture.batch_results)}",
+                        source_file_names_by_id=_source_file_names_by_id(context.file_specs),
+                    )
+                )
 
         merged = merge_enrichment_batches(discovery, batch_results)
         merged.usage = sum_token_usage(batch_usage)
         if debug_capture is not None:
             debug_capture.merged_result = merged
+            debug_capture.merged_numeric_trace = build_numeric_resolution_trace(
+                merged,
+                stage="merged_enrichment",
+                source_file_names_by_id=_source_file_names_by_id(context.file_specs),
+            )
             debug_capture.batch_size = resolved_batch_size
             debug_capture.model = self._provider.model
         return merged
@@ -432,7 +496,11 @@ class GeminiEnrichmentDebugCapture:
     raw_responses: list[str | None] | None = None
     batch_results: list[GeminiEnrichmentResult] | None = None
     batch_usage: list[TokenUsage | None] | None = None
+    batch_numeric_traces: list[NumericResolutionTrace] | None = None
+    region_sanitization_events: list[RegionSanitizationEvent] | None = None
+    inventory_trace: InventoryDebugTrace | None = None
     merged_result: GeminiEnrichmentResult | None = None
+    merged_numeric_trace: NumericResolutionTrace | None = None
     batch_size: int | None = None
     model: str | None = None
 
@@ -440,6 +508,19 @@ class GeminiEnrichmentDebugCapture:
         self.raw_responses = [] if self.raw_responses is None else self.raw_responses
         self.batch_results = [] if self.batch_results is None else self.batch_results
         self.batch_usage = [] if self.batch_usage is None else self.batch_usage
+        self.batch_numeric_traces = (
+            [] if self.batch_numeric_traces is None else self.batch_numeric_traces
+        )
+        self.region_sanitization_events = (
+            []
+            if self.region_sanitization_events is None
+            else self.region_sanitization_events
+        )
+        self.inventory_trace = (
+            InventoryDebugTrace()
+            if self.inventory_trace is None
+            else self.inventory_trace
+        )
 
 
 @dataclass
@@ -448,6 +529,9 @@ class GeminiFullPipelineDebugCapture:
     scope: GeminiScopeResult | None = None
     enrichment: GeminiEnrichmentResult | None = None
     gemini_extraction: GeminiExtraction | None = None
+    inventory_trace: InventoryDebugTrace | None = None
+    numeric_trace: NumericResolutionTrace | None = None
+    reconciliation_decisions: list[InventoryDecision] | None = None
     discovery_debug: GeminiDiscoveryDebugCapture | None = None
     scope_debug: GeminiScopeDebugCapture | None = None
     enrichment_debug: GeminiEnrichmentDebugCapture | None = None
@@ -496,6 +580,22 @@ def _default_evidence_source_id(file_specs: list[_LocalFileSpec]) -> str | None:
 
 def _source_ids(file_specs: list[_LocalFileSpec]) -> list[str]:
     return [f"source-{index}" for index, _ in enumerate(file_specs, start=1)]
+
+
+def _source_file_names_by_id(file_specs: list[_LocalFileSpec]) -> dict[str, str]:
+    return {
+        f"source-{index}": spec.path.name
+        for index, spec in enumerate(file_specs, start=1)
+    }
+
+
+def _source_region_frames(file_specs: list[_LocalFileSpec]) -> dict[str, SourceRegionFrame]:
+    frames: dict[str, SourceRegionFrame] = {}
+    for index, spec in enumerate(file_specs, start=1):
+        frame = _image_region_frame(spec.path, spec.mime_type)
+        if frame is not None:
+            frames[f"source-{index}"] = frame
+    return frames
 
 
 def _media_types(file_specs: list[_LocalFileSpec]) -> list[str]:
@@ -559,13 +659,21 @@ def _parse_gemini_scope_response(
         raise ValueError("Gemini devolvio JSON invalido para GeminiScopeResult.") from exc
 
 
-def _parse_gemini_enrichment_response(response) -> GeminiEnrichmentResult:
+def _parse_gemini_enrichment_response(
+    response,
+    *,
+    source_frames: dict[str, SourceRegionFrame] | None = None,
+) -> tuple[GeminiEnrichmentResult, list[RegionSanitizationEvent]]:
     text = getattr(response, "text", None)
     if not text:
         raise ValueError("Gemini no devolvio texto JSON para validar GeminiEnrichmentResult.")
 
     try:
-        return GeminiEnrichmentResult.model_validate_json(text)
+        sanitized_text, region_events = sanitize_enrichment_regions_json(
+            text,
+            source_frames=source_frames,
+        )
+        return GeminiEnrichmentResult.model_validate_json(sanitized_text), region_events
     except Exception as exc:
         raise ValueError("Gemini devolvio JSON invalido para GeminiEnrichmentResult.") from exc
 
@@ -666,6 +774,71 @@ def _pdf_page_count(path: Path) -> int | None:
 
     count = len(re.findall(rb"/Type\s*/Page\b", content))
     return count or None
+
+
+def _image_region_frame(path: Path, mime_type: str) -> SourceRegionFrame | None:
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+
+    if mime_type == "image/png":
+        return _png_region_frame(data)
+    if mime_type == "image/jpeg":
+        return _jpeg_region_frame(data)
+    return None
+
+
+def _png_region_frame(data: bytes) -> SourceRegionFrame | None:
+    if len(data) < 24 or not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return None
+    width, height = struct.unpack(">II", data[16:24])
+    if width <= 0 or height <= 0:
+        return None
+    return SourceRegionFrame(width=width, height=height)
+
+
+def _jpeg_region_frame(data: bytes) -> SourceRegionFrame | None:
+    if len(data) < 4 or not data.startswith(b"\xff\xd8"):
+        return None
+
+    offset = 2
+    while offset + 9 < len(data):
+        if data[offset] != 0xFF:
+            offset += 1
+            continue
+        marker = data[offset + 1]
+        offset += 2
+        if marker in {0xD8, 0xD9}:
+            continue
+        if offset + 2 > len(data):
+            return None
+        segment_length = int.from_bytes(data[offset : offset + 2], "big")
+        if segment_length < 2 or offset + segment_length > len(data):
+            return None
+        if marker in {
+            0xC0,
+            0xC1,
+            0xC2,
+            0xC3,
+            0xC5,
+            0xC6,
+            0xC7,
+            0xC9,
+            0xCA,
+            0xCB,
+            0xCD,
+            0xCE,
+            0xCF,
+        }:
+            height = int.from_bytes(data[offset + 3 : offset + 5], "big")
+            width = int.from_bytes(data[offset + 5 : offset + 7], "big")
+            if width <= 0 or height <= 0:
+                return None
+            return SourceRegionFrame(width=width, height=height)
+        offset += segment_length
+
+    return None
 
 
 def _build_multifile_contents(prompt: str, file_specs: list[_LocalFileSpec]) -> list[types.Part]:

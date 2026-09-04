@@ -24,11 +24,15 @@ from app.services.gemini_enrichment_pipeline import (
     merge_enrichment_batches,
 )
 from app.services.inventory_reconciliation import (
+    CONTEXT_LABEL,
+    CONTEXT_LABEL_NOT_IDENTITY_REASON,
     DUPLICATE_REFERENCE_REASON,
     ORPHAN_REFERENCE_REASON,
     SOURCE_CONFLICT_REASON,
     reconcile_inventory_candidates,
 )
+from app.services.numeric_trace import build_numeric_resolution_trace
+from app.services.region_sanitizer import REGION_NORMALIZED
 
 
 class _UploadedFile:
@@ -100,6 +104,18 @@ def _provider_with_responses(responses: list[_FakeResponse]) -> GeminiExtraction
 def _pdf(tmp_path: Path, name: str = "planos.pdf") -> Path:
     path = tmp_path / name
     path.write_bytes(b"%PDF-1.7\ncontent")
+    return path
+
+
+def _png(tmp_path: Path, name: str = "plano.png", width: int = 1000, height: int = 1000) -> Path:
+    path = tmp_path / name
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + b"\x00\x00\x00\r"
+        + b"IHDR"
+        + width.to_bytes(4, "big")
+        + height.to_bytes(4, "big")
+    )
     return path
 
 
@@ -764,3 +780,468 @@ def test_inventory_reconciliation_marks_same_reference_source_conflict_for_revie
     assert extraction.elements[0].status == ExtractionStatus.AMBIGUOUS
     assert SOURCE_CONFLICT_REASON in extraction.elements[0].missing_or_unknown
     assert SOURCE_CONFLICT_REASON in (extraction.notes or "")
+
+
+def test_inventory_reconciliation_marks_quantity_conflict_without_silent_overwrite() -> None:
+    extraction = enrichment_to_gemini_extraction(
+        GeminiDiscoveryResult(),
+        GeminiEnrichmentResult(
+            elements=[
+                GeminiElementEnrichment(
+                    temporary_id="table",
+                    reference="V-10",
+                    quantity=25,
+                    measurements=[
+                        GeminiEnrichmentMeasurement(type="width", value=2800, unit="mm"),
+                        GeminiEnrichmentMeasurement(type="height", value=2900, unit="mm"),
+                    ],
+                ),
+                GeminiElementEnrichment(
+                    temporary_id="level-note",
+                    reference="V-10",
+                    quantity=5,
+                    occurrence_context="N.P_5 / niveles 5 al 9",
+                    evidence=[
+                        GeminiEnrichmentEvidenceNote(
+                            source_id="source-2",
+                            text="N.P_5 / niveles 5 al 9",
+                        )
+                    ],
+                ),
+            ]
+        ),
+    )
+
+    element = extraction.elements[0]
+
+    assert len(extraction.elements) == 1
+    assert element.reference == "V-10"
+    assert element.quantity == 25
+    assert element.status == ExtractionStatus.AMBIGUOUS
+    assert SOURCE_CONFLICT_REASON in element.missing_or_unknown
+    assert SOURCE_CONFLICT_REASON in (extraction.notes or "")
+
+
+def test_inventory_reconciliation_keeps_context_labels_as_distinct_occurrences() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="room-a",
+                reference="SALA",
+                quantity=1,
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=4.10, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=2.85, unit="m"),
+                ],
+                evidence=[
+                    GeminiEnrichmentEvidenceNote(
+                        source_id="source-1",
+                        text="SALA 4.10 x 2.85",
+                    )
+                ],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="room-b",
+                reference="SALA",
+                quantity=1,
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=4.50, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=2.50, unit="m"),
+                ],
+                evidence=[
+                    GeminiEnrichmentEvidenceNote(
+                        source_id="source-2",
+                        text="SALA 4.50 x 2.50",
+                    )
+                ],
+            ),
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+
+    assert [item.temporary_id for item in result.elements] == ["room-a", "room-b"]
+    assert [decision.action for decision in decisions] == ["KEEP", "KEEP"]
+    assert {decision.reason for decision in decisions} == {
+        CONTEXT_LABEL_NOT_IDENTITY_REASON
+    }
+    assert {decision.reference_semantics for decision in decisions} == {CONTEXT_LABEL}
+    assert all(decision.normalized_reference is None for decision in decisions)
+    assert [decision.winner_temporary_id for decision in decisions] == ["room-a", "room-b"]
+    assert {
+        candidate.source_ids
+        for decision in decisions
+        for candidate in decision.candidates
+    } == {
+        ("source-1",),
+        ("source-2",),
+    }
+    assert any(
+        "width=4.1m" in candidate.dimensions
+        for decision in decisions
+        for candidate in decision.candidates
+    )
+    assert any(
+        "width=4.5m" in candidate.dimensions
+        for decision in decisions
+        for candidate in decision.candidates
+    )
+
+
+def test_inventory_reconciliation_preserves_reference_null_as_distinct_candidates() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="visual-a",
+                reference=None,
+                quantity=1,
+                measurements=[GeminiEnrichmentMeasurement(type="width", value=6.70, unit="m")],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="visual-b",
+                reference=None,
+                quantity=1,
+                measurements=[GeminiEnrichmentMeasurement(type="width", value=6.70, unit="m")],
+            ),
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+
+    assert [item.temporary_id for item in result.elements] == ["visual-a", "visual-b"]
+    assert [decision.action for decision in decisions] == ["KEEP", "KEEP"]
+
+
+def test_inventory_reconciliation_traces_same_reference_different_function_conflict() -> None:
+    extraction = enrichment_to_gemini_extraction(
+        GeminiDiscoveryResult(),
+        GeminiEnrichmentResult(
+            elements=[
+                GeminiElementEnrichment(
+                    temporary_id="fixed",
+                    reference="V-4",
+                    quantity=1,
+                    functional_type_raw="FIXED",
+                    measurements=[GeminiEnrichmentMeasurement(type="width", value=1.2, unit="m")],
+                ),
+                GeminiElementEnrichment(
+                    temporary_id="door",
+                    reference="V-04",
+                    quantity=1,
+                    functional_type_raw="SWING_DOOR",
+                    measurements=[GeminiEnrichmentMeasurement(type="width", value=0.9, unit="m")],
+                ),
+            ]
+        ),
+    )
+
+    assert len(extraction.elements) == 1
+    assert extraction.elements[0].status == ExtractionStatus.AMBIGUOUS
+    assert SOURCE_CONFLICT_REASON in extraction.elements[0].missing_or_unknown
+    assert SOURCE_CONFLICT_REASON in (extraction.notes or "")
+
+
+def test_numeric_trace_distinguishes_quantity_level_dimensions_and_component_count() -> None:
+    trace = build_numeric_resolution_trace(
+        GeminiEnrichmentResult(
+            elements=[
+                GeminiElementEnrichment(
+                    temporary_id="v-12",
+                    reference="V-12",
+                    quantity=1,
+                    panel_count=5,
+                    measurements=[
+                        GeminiEnrichmentMeasurement(type="width", value=11.68, unit="m"),
+                        GeminiEnrichmentMeasurement(type="height", value=2.65, unit="m"),
+                    ],
+                    evidence=[
+                        GeminiEnrichmentEvidenceNote(
+                            source_id="source-1",
+                            type="table",
+                            text="PLANTA 11.68 x 2.65 CANTIDAD: 1 N.P_3 5 cuerpos",
+                            page_number=2,
+                        )
+                    ],
+                    status=ExtractionStatus.EXPLICIT,
+                )
+            ]
+        ),
+        stage="test",
+        source_file_names_by_id={"source-1": "planos.pdf"},
+    )
+
+    element_trace = trace.elements[0]
+    roles = {(candidate.semantic_role, candidate.value) for candidate in element_trace.candidates}
+
+    assert ("QUANTITY", 1) in roles
+    assert ("LEVEL", 3) in roles
+    assert ("WIDTH", 11.68) in roles
+    assert ("HEIGHT", 2.65) in roles
+    assert ("COMPONENT_COUNT", 5) in roles
+    assert element_trace.final_quantity.value == 1
+    assert element_trace.final_quantity.resolution_reason == "MODEL_OUTPUT"
+    assert all(
+        candidate.source_file_name == "planos.pdf"
+        for candidate in element_trace.candidates
+        if candidate.source_id == "source-1"
+    )
+
+
+def test_numeric_trace_distinguishes_level_range_and_repetition_count() -> None:
+    trace = build_numeric_resolution_trace(
+        GeminiEnrichmentResult(
+            elements=[
+                GeminiElementEnrichment(
+                    temporary_id="v-20",
+                    reference="V-20",
+                    quantity=25,
+                    evidence=[
+                        GeminiEnrichmentEvidenceNote(
+                            source_id="source-2",
+                            type="table",
+                            text="CANTIDAD: 25. Se repite desde niveles 5 al 9",
+                        )
+                    ],
+                )
+            ]
+        ),
+        stage="test",
+        source_file_names_by_id={"source-2": "cuadro.xlsx"},
+    )
+
+    candidates = trace.elements[0].candidates
+    roles = {(candidate.semantic_role, candidate.value) for candidate in candidates}
+    repetition = next(
+        candidate for candidate in candidates if candidate.semantic_role == "REPETITION_COUNT"
+    )
+
+    assert ("QUANTITY", 25) in roles
+    assert ("LEVEL_RANGE", "5-9") in roles
+    assert ("REPETITION_COUNT", 5) in roles
+    assert repetition.status == ExtractionStatus.INFERRED
+    assert repetition.source_type == "MODEL_INFERRED"
+    assert repetition.source_id == "source-2"
+    assert repetition.source_file_name == "cuadro.xlsx"
+
+
+def test_numeric_trace_keeps_multifile_candidate_provenance() -> None:
+    trace = build_numeric_resolution_trace(
+        GeminiEnrichmentResult(
+            elements=[
+                GeminiElementEnrichment(
+                    temporary_id="pv-03",
+                    evidence=[
+                        GeminiEnrichmentEvidenceNote(
+                            source_id="source-1",
+                            type="table",
+                            text="PV-03 CANTIDAD: 3",
+                        ),
+                        GeminiEnrichmentEvidenceNote(
+                            source_id="source-2",
+                            type="visual",
+                            text="PISO 8",
+                        ),
+                    ],
+                )
+            ]
+        ),
+        stage="test",
+        source_file_names_by_id={"source-1": "cuadro.pdf", "source-2": "plano.png"},
+    )
+
+    quantity = next(
+        candidate for candidate in trace.elements[0].candidates
+        if candidate.semantic_role == "QUANTITY"
+    )
+    floor = next(
+        candidate for candidate in trace.elements[0].candidates
+        if candidate.semantic_role == "FLOOR"
+    )
+
+    assert quantity.source_id == "source-1"
+    assert quantity.source_file_name == "cuadro.pdf"
+    assert quantity.source_type == "TABLE"
+    assert floor.source_id == "source-2"
+    assert floor.source_file_name == "plano.png"
+    assert floor.source_type == "VISION"
+
+
+def test_numeric_trace_observes_quantity_aliases_without_merging_other_roles() -> None:
+    trace = build_numeric_resolution_trace(
+        GeminiEnrichmentResult(
+            elements=[
+                GeminiElementEnrichment(
+                    temporary_id="alias-case",
+                    quantity=7,
+                    evidence=[
+                        GeminiEnrichmentEvidenceNote(
+                            source_id="source-1",
+                            type="table",
+                            text="ITEM 10 QTY: 7 UND 7 4 modulos vidrio 10 mm",
+                        )
+                    ],
+                )
+            ]
+        ),
+        stage="test",
+        source_file_names_by_id={"source-1": "cuadro.pdf"},
+    )
+
+    roles = [
+        (candidate.semantic_role, candidate.value)
+        for candidate in trace.elements[0].candidates
+    ]
+
+    assert ("QUANTITY", 7) in roles
+    assert ("ITEM_NUMBER", 10) in roles
+    assert ("SECTION_COUNT", 4) in roles
+    assert ("GLASS_THICKNESS", 10) in roles
+    assert trace.elements[0].final_quantity.value == 7
+
+
+def test_enrichment_debug_capture_stores_batch_and_merged_numeric_traces(
+    tmp_path: Path,
+) -> None:
+    provider = _provider_with_responses(
+        [
+            _FakeResponse(
+                '{"elements": ['
+                '{"temporary_id": "d-1", "reference": "V-01", "quantity": 5, '
+                '"evidence": [{"source_id": "source-1", "type": "table", '
+                '"text": "V-01 CANTIDAD: 5"}]}'
+                "]}"
+            )
+        ]
+    )
+    debug_capture = GeminiEnrichmentDebugCapture()
+
+    result = provider.enrich_discoveries_from_files(
+        [_pdf(tmp_path)],
+        _discovery(1),
+        debug_capture=debug_capture,
+    )
+
+    assert result.elements[0].quantity == 5
+    assert len(debug_capture.batch_numeric_traces) == 1
+    assert debug_capture.batch_numeric_traces[0].elements[0].final_quantity.value == 5
+    assert debug_capture.merged_numeric_trace is not None
+    assert debug_capture.merged_numeric_trace.elements[0].final_quantity.value == 5
+
+
+def test_enrichment_normalizes_absolute_image_region_without_losing_evidence(
+    tmp_path: Path,
+) -> None:
+    provider = _provider_with_responses(
+        [
+            _FakeResponse(
+                '{"elements": ['
+                '{"temporary_id": "d-1", "reference": "V-01", '
+                '"evidence": [{"source_id": "source-1", "type": "visual", '
+                '"text": "Detalle V-01", '
+                '"region": {"x": 50, "y": 100, "width": 200, "height": 300}}]}'
+                "]}"
+            )
+        ]
+    )
+    debug_capture = GeminiEnrichmentDebugCapture()
+
+    result = provider.enrich_discoveries_from_files(
+        [_png(tmp_path)],
+        _discovery(1),
+        debug_capture=debug_capture,
+    )
+
+    evidence = result.elements[0].evidence[0]
+
+    assert evidence.text == "Detalle V-01"
+    assert evidence.region is not None
+    assert evidence.region.x == 0.05
+    assert evidence.region.y == 0.1
+    assert evidence.region.width == 0.2
+    assert evidence.region.height == 0.3
+    assert debug_capture.region_sanitization_events[0].action == REGION_NORMALIZED
+
+
+def test_full_pipeline_debug_capture_records_numeric_trace_without_changing_quantity(
+    tmp_path: Path,
+) -> None:
+    provider = _provider_with_responses(
+        [
+            _FakeResponse('{"elements": [{"temporary_id": "d-1", "reference": "V-01"}]}'),
+            _scope_response(("d-1", "in_scope_full")),
+            _FakeResponse(
+                '{"elements": ['
+                '{"temporary_id": "d-1", "reference": "V-01", "quantity": 5, '
+                '"evidence": [{"source_id": "source-1", "type": "table", '
+                '"text": "N.P_5 / CANTIDAD: 5"}]}'
+                "]}"
+            ),
+        ]
+    )
+    debug_capture = GeminiFullPipelineDebugCapture()
+
+    result = provider.extract_with_discovery_from_files(
+        [_pdf(tmp_path)],
+        debug_capture=debug_capture,
+    )
+
+    assert result.elements[0].quantity is not None
+    assert result.elements[0].quantity.value == 5
+    assert debug_capture.numeric_trace is not None
+    assert debug_capture.numeric_trace.elements[0].final_quantity.value == 5
+    assert {
+        candidate.semantic_role
+        for candidate in debug_capture.numeric_trace.elements[0].candidates
+    } >= {"QUANTITY", "LEVEL"}
+    assert debug_capture.reconciliation_decisions is not None
+
+
+def test_full_pipeline_debug_capture_records_inventory_stage_counts(
+    tmp_path: Path,
+) -> None:
+    provider = _provider_with_responses(
+        [
+            _FakeResponse(
+                '{"elements": ['
+                '{"temporary_id": "a", "reference": "SALA"}, '
+                '{"temporary_id": "b", "reference": "SALA"}'
+                "]}"
+            ),
+            _scope_response(("a", "in_scope_full"), ("b", "in_scope_full")),
+            _FakeResponse(
+                '{"elements": ['
+                '{"temporary_id": "a", "reference": "SALA", "quantity": 1, '
+                '"measurements": [{"type": "width", "value": 4.10, "unit": "m"}]}, '
+                '{"temporary_id": "b", "reference": "SALA", "quantity": 1, '
+                '"measurements": [{"type": "width", "value": 4.50, "unit": "m"}]}'
+                "]}"
+            ),
+        ]
+    )
+    debug_capture = GeminiFullPipelineDebugCapture()
+
+    provider.extract_with_discovery_from_files(
+        [_pdf(tmp_path)],
+        debug_capture=debug_capture,
+    )
+
+    assert debug_capture.inventory_trace is not None
+    stage_counts = {
+        stage.stage: stage.count
+        for stage in debug_capture.inventory_trace.stages
+    }
+
+    assert stage_counts["DISCOVERY"] == 2
+    assert stage_counts["ENRICHMENT_BATCH_1"] == 2
+    assert stage_counts["MERGED_ENRICHMENT"] == 2
+    assert stage_counts["PRE_RECONCILIATION"] == 2
+    assert stage_counts["POST_RECONCILIATION"] == 2
+    assert stage_counts["FINAL_REQUIREMENT_EXTRACTION"] == 2
+    assert debug_capture.reconciliation_decisions is not None
+    assert [decision.action for decision in debug_capture.reconciliation_decisions] == [
+        "KEEP",
+        "KEEP",
+    ]
+    assert {
+        decision.reason for decision in debug_capture.reconciliation_decisions
+    } == {CONTEXT_LABEL_NOT_IDENTITY_REASON}

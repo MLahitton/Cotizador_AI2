@@ -2,7 +2,7 @@
 
 import re
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.models.common import ExtractionStatus
 from app.models.gemini_enrichment import (
@@ -14,6 +14,23 @@ from app.models.gemini_enrichment import (
 ORPHAN_REFERENCE_REASON = "INVENTORY_ORPHAN_REFERENCE_IGNORED"
 DUPLICATE_REFERENCE_REASON = "INVENTORY_REFERENCE_DUPLICATE_MERGED"
 SOURCE_CONFLICT_REASON = "INVENTORY_SOURCE_CONFLICT_REQUIRES_REVIEW"
+FORMAL_REFERENCE = "FORMAL_REFERENCE"
+CONTEXT_LABEL = "CONTEXT_LABEL"
+UNKNOWN_REFERENCE = "UNKNOWN_REFERENCE"
+CONTEXT_LABEL_NOT_IDENTITY_REASON = "INVENTORY_CONTEXT_LABEL_NOT_IDENTITY"
+INSUFFICIENT_IDENTITY_REASON = "INVENTORY_INSUFFICIENT_IDENTITY_EVIDENCE"
+
+_FORMAL_REFERENCE_RE = re.compile(r"([A-Z]{1,4})[\s._-]*(\d{1,4})([A-Z]?)")
+
+
+@dataclass(frozen=True)
+class InventoryCandidateSnapshot:
+    temporary_id: str
+    reference: str | None
+    source_ids: tuple[str, ...] = ()
+    dimensions: tuple[str, ...] = ()
+    quantity: str | int | float | None = None
+    support_score: int = 0
 
 
 @dataclass(frozen=True)
@@ -22,6 +39,11 @@ class InventoryDecision:
     reason: str
     temporary_ids: tuple[str, ...]
     reference: str | None
+    normalized_reference: str | None = None
+    reference_semantics: str | None = None
+    winner_temporary_id: str | None = None
+    losing_temporary_ids: tuple[str, ...] = ()
+    candidates: tuple[InventoryCandidateSnapshot, ...] = field(default_factory=tuple)
 
 
 def reconcile_inventory_candidates(
@@ -41,6 +63,7 @@ def reconcile_inventory_candidates(
     passthrough: list[GeminiElementEnrichment] = []
 
     for element in enrichment.elements:
+        reference_semantics = _classify_reference_semantics(element.reference)
         if _is_orphan_reference(element):
             decisions.append(
                 InventoryDecision(
@@ -48,6 +71,9 @@ def reconcile_inventory_candidates(
                     ORPHAN_REFERENCE_REASON,
                     (element.temporary_id,),
                     element.reference,
+                    normalized_reference=_canonical_reference(element.reference),
+                    reference_semantics=reference_semantics,
+                    candidates=(_candidate_snapshot(element),),
                 )
             )
             warnings.append(
@@ -59,12 +85,21 @@ def reconcile_inventory_candidates(
         canonical = _canonical_reference(element.reference)
         if canonical is None:
             passthrough.append(element)
+            reason = (
+                CONTEXT_LABEL_NOT_IDENTITY_REASON
+                if reference_semantics == CONTEXT_LABEL
+                else INSUFFICIENT_IDENTITY_REASON
+            )
             decisions.append(
                 InventoryDecision(
                     "KEEP",
-                    "INVENTORY_CANDIDATE_HAS_COMMERCIAL_SUPPORT",
+                    reason,
                     (element.temporary_id,),
                     element.reference,
+                    normalized_reference=None,
+                    reference_semantics=reference_semantics,
+                    winner_temporary_id=element.temporary_id,
+                    candidates=(_candidate_snapshot(element),),
                 )
             )
             continue
@@ -80,11 +115,15 @@ def reconcile_inventory_candidates(
                     "INVENTORY_CANDIDATE_HAS_COMMERCIAL_SUPPORT",
                     (items[0].temporary_id,),
                     items[0].reference,
+                    normalized_reference=canonical,
+                    reference_semantics=FORMAL_REFERENCE,
+                    winner_temporary_id=items[0].temporary_id,
+                    candidates=(_candidate_snapshot(items[0]),),
                 )
             )
             continue
 
-        merged, merge_warnings = _merge_reference_group(canonical, items)
+        merged, merge_warnings, ordered = _merge_reference_group(canonical, items)
         kept.append(merged)
         warnings.extend(merge_warnings)
         decisions.append(
@@ -93,6 +132,11 @@ def reconcile_inventory_candidates(
                 DUPLICATE_REFERENCE_REASON,
                 tuple(item.temporary_id for item in items),
                 canonical,
+                normalized_reference=canonical,
+                reference_semantics=FORMAL_REFERENCE,
+                winner_temporary_id=ordered[0].temporary_id,
+                losing_temporary_ids=tuple(item.temporary_id for item in ordered[1:]),
+                candidates=tuple(_candidate_snapshot(item) for item in ordered),
             )
         )
 
@@ -157,17 +201,25 @@ def _canonical_reference(reference: str | None) -> str | None:
     if not reference:
         return None
     value = reference.strip().upper()
-    match = re.fullmatch(r"([A-Z]{1,4})[\s._-]*(\d{1,4})([A-Z]?)", value)
+    match = _FORMAL_REFERENCE_RE.fullmatch(value)
     if match is None:
-        return value if value else None
+        return None
     prefix, number, suffix = match.groups()
     return f"{prefix}-{int(number):02d}{suffix}"
+
+
+def _classify_reference_semantics(reference: str | None) -> str:
+    if not _text(reference):
+        return UNKNOWN_REFERENCE
+    if _canonical_reference(reference) is not None:
+        return FORMAL_REFERENCE
+    return CONTEXT_LABEL
 
 
 def _merge_reference_group(
     canonical: str,
     items: list[GeminiElementEnrichment],
-) -> tuple[GeminiElementEnrichment, list[str]]:
+) -> tuple[GeminiElementEnrichment, list[str], list[GeminiElementEnrichment]]:
     ordered = sorted(items, key=lambda item: _commercial_support_score(item), reverse=True)
     base = ordered[0].model_copy(deep=True)
     warnings = [
@@ -207,7 +259,37 @@ def _merge_reference_group(
             f"{', '.join(sorted(set(conflicts)))}."
         )
 
-    return base, warnings
+    return base, warnings, ordered
+
+
+def _candidate_snapshot(element: GeminiElementEnrichment) -> InventoryCandidateSnapshot:
+    return InventoryCandidateSnapshot(
+        temporary_id=element.temporary_id,
+        reference=element.reference,
+        source_ids=tuple(_source_ids(element)),
+        dimensions=tuple(_dimensions(element)),
+        quantity=element.quantity,
+        support_score=_commercial_support_score(element),
+    )
+
+
+def _source_ids(element: GeminiElementEnrichment) -> list[str]:
+    values: list[str] = []
+    for evidence in element.evidence:
+        if evidence.source_id and evidence.source_id not in values:
+            values.append(evidence.source_id)
+    return values
+
+
+def _dimensions(element: GeminiElementEnrichment) -> list[str]:
+    values: list[str] = []
+    for measurement in element.measurements:
+        label = measurement.type or measurement.raw_label or "unspecified"
+        if measurement.value is None:
+            values.append(label)
+        else:
+            values.append(f"{label}={measurement.value}{measurement.unit or ''}")
+    return values
 
 
 def _fill_scalar(
