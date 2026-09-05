@@ -64,6 +64,8 @@ class ChatActionIntent(BaseModel):
     actionType: ChatActionType
     scope: ChatScope
     targetReference: str | None = None
+    targetReferences: list[str] = Field(default_factory=list)
+    targetCount: int = Field(default=0, ge=0)
     requestedValue: str | None = None
     requestedQuantity: int | None = Field(default=None, gt=0)
     requestedWidthMm: int | None = Field(default=None, gt=0)

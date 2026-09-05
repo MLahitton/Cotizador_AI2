@@ -18,7 +18,8 @@ class ChatActionInterpreter:
         message = request.userMessage.strip()
         text = _normalize_text(message)
         scope = _scope(request)
-        target_reference = _target_reference(message)
+        target_references = _target_references(message)
+        target_reference = target_references[0] if target_references else None
         has_mutation = _has_mutation_intent(text)
         pending_action = _pending_action(request)
 
@@ -51,9 +52,26 @@ class ChatActionInterpreter:
                 action_type="UNKNOWN",
                 scope=scope,
                 target_reference=target_reference,
+                target_references=target_references,
                 is_action=False,
                 confidence=0.9,
                 classification_reason="INFORMATIONAL_GUARD",
+            )
+
+        if _is_heterogeneous_batch(message, text, target_references):
+            return _intent(
+                request,
+                action_type="CHANGE_SYSTEM",
+                scope=scope,
+                target_reference=target_reference,
+                target_references=target_references,
+                requires_clarification=True,
+                clarification_reason=(
+                    "La instruccion contiene valores distintos por item; "
+                    "AI2 requiere una accion homogenea por lote."
+                ),
+                confidence=0.62,
+                classification_reason="HETEROGENEOUS_BATCH_REQUIRES_CLARIFICATION",
             )
 
         dimensions = _dimensions_mm(text)
@@ -63,10 +81,14 @@ class ChatActionInterpreter:
                 action_type="CHANGE_DIMENSIONS",
                 scope=scope,
                 target_reference=target_reference,
+                target_references=target_references,
                 requested_width_mm=dimensions[0],
                 requested_height_mm=dimensions[1],
                 confidence=0.92,
-                classification_reason="EXPLICIT_DIMENSION_MUTATION",
+                classification_reason=_action_reason(
+                    "EXPLICIT_DIMENSION_MUTATION",
+                    target_references,
+                ),
             )
 
         quantity = _quantity(text)
@@ -76,9 +98,13 @@ class ChatActionInterpreter:
                 action_type="CHANGE_QUANTITY",
                 scope=scope,
                 target_reference=target_reference,
+                target_references=target_references,
                 requested_quantity=quantity,
                 confidence=0.94,
-                classification_reason="EXPLICIT_QUANTITY_MUTATION",
+                classification_reason=_action_reason(
+                    "EXPLICIT_QUANTITY_MUTATION",
+                    target_references,
+                ),
             )
         if _has_quantity_intent(text):
             return _intent(
@@ -86,6 +112,7 @@ class ChatActionInterpreter:
                 action_type="CHANGE_QUANTITY",
                 scope=scope,
                 target_reference=target_reference,
+                target_references=target_references,
                 requires_clarification=True,
                 clarification_reason="Falta una cantidad entera positiva.",
                 confidence=0.65,
@@ -98,8 +125,12 @@ class ChatActionInterpreter:
                 action_type="EXCLUDE_ITEM",
                 scope=scope,
                 target_reference=target_reference,
+                target_references=target_references,
                 confidence=0.95,
-                classification_reason="EXPLICIT_EXCLUDE_MUTATION",
+                classification_reason=_action_reason(
+                    "EXPLICIT_EXCLUDE_MUTATION",
+                    target_references,
+                ),
             )
 
         if _has_include_intent(text) and has_mutation:
@@ -108,8 +139,12 @@ class ChatActionInterpreter:
                 action_type="INCLUDE_ITEM",
                 scope=scope,
                 target_reference=target_reference,
+                target_references=target_references,
                 confidence=0.95,
-                classification_reason="EXPLICIT_INCLUDE_MUTATION",
+                classification_reason=_action_reason(
+                    "EXPLICIT_INCLUDE_MUTATION",
+                    target_references,
+                ),
             )
 
         commercial_line = _commercial_line_value(message, text)
@@ -119,6 +154,7 @@ class ChatActionInterpreter:
                 action_type="CHANGE_COMMERCIAL_LINE",
                 scope="REQUIREMENT" if _global_scope_requested(text) else scope,
                 target_reference=target_reference,
+                target_references=target_references,
                 requested_value=commercial_line,
                 requested_attributes=_attributes_for_action(
                     "CHANGE_COMMERCIAL_LINE",
@@ -138,11 +174,17 @@ class ChatActionInterpreter:
         glass = _glass_value(message, text)
         if glass is not None or _has_glass_intent(text):
             requested_attributes = _attributes_for_action("CHANGE_GLASS", glass, text)
+            classification_reason = (
+                "GLASS_FAMILY_EXTRACTED"
+                if _has_glass_family(requested_attributes)
+                else "GLASS_MUTATION"
+            )
             return _intent(
                 request,
                 action_type="CHANGE_GLASS",
                 scope=scope,
                 target_reference=target_reference,
+                target_references=target_references,
                 requested_value=glass,
                 requested_attributes=requested_attributes,
                 requires_clarification=glass is None,
@@ -152,10 +194,9 @@ class ChatActionInterpreter:
                     else None
                 ),
                 confidence=0.9 if glass is not None else 0.68,
-                classification_reason=(
-                    "GLASS_FAMILY_EXTRACTED"
-                    if _has_glass_family(requested_attributes)
-                    else "GLASS_MUTATION"
+                classification_reason=_action_reason(
+                    classification_reason,
+                    target_references,
                 ),
             )
 
@@ -166,6 +207,7 @@ class ChatActionInterpreter:
                 action_type="CHANGE_FINISH",
                 scope=scope,
                 target_reference=target_reference,
+                target_references=target_references,
                 requested_value=finish,
                 requested_attributes=_attributes_for_action("CHANGE_FINISH", finish, text),
                 requires_clarification=finish is None,
@@ -175,7 +217,7 @@ class ChatActionInterpreter:
                     else None
                 ),
                 confidence=0.9 if finish is not None else 0.68,
-                classification_reason="FINISH_MUTATION",
+                classification_reason=_action_reason("FINISH_MUTATION", target_references),
             )
 
         system = _system_value(message, text)
@@ -185,6 +227,7 @@ class ChatActionInterpreter:
                 action_type="CHANGE_SYSTEM",
                 scope=scope,
                 target_reference=target_reference,
+                target_references=target_references,
                 requested_value=system,
                 requested_attributes=_attributes_for_action("CHANGE_SYSTEM", system, text),
                 requires_clarification=system is None,
@@ -194,10 +237,13 @@ class ChatActionInterpreter:
                     else None
                 ),
                 confidence=0.92 if system is not None else 0.68,
-                classification_reason=(
-                    "SYSTEM_VALUE_FROM_MUTATION_PHRASE"
-                    if system is not None
-                    else "SYSTEM_MUTATION"
+                classification_reason=_action_reason(
+                    (
+                        "SYSTEM_VALUE_FROM_MUTATION_PHRASE"
+                        if system is not None
+                        else "SYSTEM_MUTATION"
+                    ),
+                    target_references,
                 ),
             )
 
@@ -207,6 +253,7 @@ class ChatActionInterpreter:
                 action_type="UNKNOWN",
                 scope=scope,
                 target_reference=target_reference,
+                target_references=target_references,
                 requires_clarification=True,
                 clarification_reason="Falta especificar que cambio desea realizar.",
                 confidence=0.55,
@@ -218,6 +265,7 @@ class ChatActionInterpreter:
             action_type="UNKNOWN",
             scope=scope,
             target_reference=target_reference,
+            target_references=target_references,
             is_action=False,
             confidence=0.72,
             classification_reason="NO_MUTATION_EVIDENCE",
@@ -230,6 +278,7 @@ def _intent(
     action_type: str,
     scope: str,
     target_reference: str | None = None,
+    target_references: list[str] | None = None,
     requested_value: str | None = None,
     requested_quantity: int | None = None,
     requested_width_mm: int | None = None,
@@ -243,11 +292,14 @@ def _intent(
     is_follow_up: bool = False,
 ) -> ChatActionIntent:
     executable = is_action and action_type != "UNKNOWN"
+    references = target_references or ([target_reference] if target_reference else [])
     return ChatActionIntent(
         isAction=executable and not requires_clarification,
         actionType=action_type,
         scope=scope,
         targetReference=target_reference,
+        targetReferences=references,
+        targetCount=len(references),
         requestedValue=requested_value,
         requestedQuantity=requested_quantity,
         requestedWidthMm=requested_width_mm,
@@ -309,6 +361,7 @@ def _pending_action_follow_up(
                 action_type,
                 scope,
                 target_reference,
+                _pending_target_references(pending_action),
                 "Falta identificar el item objetivo para completar la accion pendiente.",
                 "PENDING_ACTION_TARGET_AMBIGUOUS",
             )
@@ -317,6 +370,7 @@ def _pending_action_follow_up(
             action_type=action_type,
             scope=scope,
             target_reference=resolved_target,
+            target_references=[resolved_target],
             requested_value=_optional_str(pending_action.get("requestedValue")),
             requested_quantity=_optional_int(pending_action.get("requestedQuantity")),
             requested_width_mm=_optional_int(pending_action.get("requestedWidthMm")),
@@ -334,6 +388,7 @@ def _pending_action_follow_up(
             action_type,
             scope,
             target_reference,
+            _pending_target_references(pending_action),
             "No se pudo resolver la opcion solicitada.",
             "PENDING_ACTION_FOLLOWUP_AMBIGUOUS",
         )
@@ -350,6 +405,7 @@ def _pending_action_follow_up(
                 action_type,
                 scope,
                 target_reference,
+                _pending_target_references(pending_action),
                 "Falta el valor solicitado para completar la accion pendiente.",
                 "PENDING_ACTION_FOLLOWUP_AMBIGUOUS",
             )
@@ -370,6 +426,7 @@ def _pending_action_follow_up(
             action_type=action_type,
             scope=scope,
             target_reference=target_reference,
+            target_references=_pending_target_references(pending_action),
             requested_value=value,
             requested_attributes=requested_attributes,
             confidence=0.88,
@@ -385,6 +442,7 @@ def _pending_action_follow_up(
                 action_type,
                 scope,
                 target_reference,
+                _pending_target_references(pending_action),
                 "Falta una cantidad entera positiva.",
                 "PENDING_ACTION_FOLLOWUP_AMBIGUOUS",
             )
@@ -393,6 +451,7 @@ def _pending_action_follow_up(
             action_type=action_type,
             scope=scope,
             target_reference=target_reference,
+            target_references=_pending_target_references(pending_action),
             requested_quantity=quantity,
             confidence=0.9,
             classification_reason="PENDING_ACTION_FOLLOWUP",
@@ -406,6 +465,7 @@ def _pending_action_follow_up(
             action_type,
             scope,
             target_reference,
+            _pending_target_references(pending_action),
             "Faltan dimensiones claras para completar la accion pendiente.",
             "PENDING_ACTION_FOLLOWUP_AMBIGUOUS",
         )
@@ -414,6 +474,7 @@ def _pending_action_follow_up(
         action_type=action_type,
         scope=scope,
         target_reference=target_reference,
+        target_references=_pending_target_references(pending_action),
         requested_width_mm=dimensions[0],
         requested_height_mm=dimensions[1],
         confidence=0.9,
@@ -427,6 +488,7 @@ def _pending_clarification(
     action_type: str,
     scope: str,
     target_reference: str | None,
+    target_references: list[str] | None,
     reason: str,
     classification_reason: str,
 ) -> ChatActionIntent:
@@ -435,6 +497,7 @@ def _pending_clarification(
         action_type=action_type,
         scope=scope,
         target_reference=target_reference,
+        target_references=target_references,
         requires_clarification=True,
         clarification_reason=reason,
         confidence=0.52,
@@ -468,6 +531,18 @@ def _pending_requested_attributes(pending_action: dict) -> ChatRequestedAttribut
     if isinstance(attributes, dict):
         return ChatRequestedAttributes.model_validate(attributes)
     return None
+
+
+def _pending_target_references(pending_action: dict) -> list[str]:
+    references = pending_action.get("targetReferences")
+    if isinstance(references, list):
+        return _dedupe_references(
+            reference
+            for reference in references
+            if isinstance(reference, str)
+        )
+    target_reference = _optional_str(pending_action.get("targetReference"))
+    return [target_reference] if target_reference else []
 
 
 def _merge_requested_attributes(
@@ -512,6 +587,26 @@ def _has_glass_family(attributes: ChatRequestedAttributes | None) -> bool:
         and attributes.glass is not None
         and attributes.glass.family is not None
     )
+
+
+def _action_reason(default_reason: str, target_references: list[str]) -> str:
+    return "MULTI_TARGET_ACTION" if len(target_references) > 1 else default_reason
+
+
+def _is_heterogeneous_batch(
+    message: str,
+    text: str,
+    target_references: list[str],
+) -> bool:
+    if len(target_references) < 2 or not _has_system_intent(text):
+        return False
+    assignments = re.findall(
+        r"\b[A-Za-z]{1,4}\s*[-_ ]?\s*\d{1,3}[A-Za-z]?\s+"
+        r"(?:a|en|con)\s+([KS]\d{2,3}|[A-Za-z]*\d{4})\b",
+        message,
+        flags=re.IGNORECASE,
+    )
+    return len({assignment.upper() for assignment in assignments}) > 1
 
 
 def _is_new_action_for_different_target(
@@ -576,12 +671,31 @@ def _scope(request: ChatActionInterpretRequest) -> str:
 
 
 def _target_reference(message: str) -> str | None:
-    match = re.search(
+    match = _target_reference_match(message)
+    if not match:
+        return None
+    return _reference_from_match(match)
+
+
+def _target_references(message: str) -> list[str]:
+    return _dedupe_references(
+        reference
+        for match in re.finditer(
+            r"\b([A-Za-z]{1,4})\s*[-_ ]?\s*(\d{1,3})([A-Za-z]?)\b",
+            message,
+        )
+        if (reference := _reference_from_match(match)) is not None
+    )
+
+
+def _target_reference_match(message: str) -> re.Match[str] | None:
+    return re.search(
         r"\b([A-Za-z]{1,4})\s*[-_ ]?\s*(\d{1,3})([A-Za-z]?)\b",
         message,
     )
-    if not match:
-        return None
+
+
+def _reference_from_match(match: re.Match[str]) -> str | None:
     prefix = match.group(1).upper()
     if prefix in {"DE", "K", "S"}:
         return None
@@ -591,6 +705,20 @@ def _target_reference(message: str) -> str | None:
 
 def _normalize_reference(value: str) -> str:
     return value.strip().casefold().replace("_", "-")
+
+
+def _dedupe_references(references: object) -> list[str]:
+    deduped = []
+    seen = set()
+    for reference in references:
+        if not isinstance(reference, str) or not reference.strip():
+            continue
+        normalized = _normalize_reference(reference)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(reference)
+    return deduped
 
 
 def _normalize_text(value: str) -> str:
@@ -768,7 +896,7 @@ def _finish_value(message: str, text: str) -> str | None:
         return None
     match = re.search(r"\b(?:acabado|color)\s+(?:en\s+)?(.+)$", message, re.IGNORECASE)
     if match:
-        value = match.group(1).strip()
+        value = _strip_trailing_target_clause(match.group(1))
         return value if value else None
     for word in ("inox", "negro mate", "negro", "blanco", "gris", "champaña", "champana"):
         if word in text:
@@ -888,6 +1016,17 @@ def _clean_requested_value(value: str) -> str | None:
     )
     cleaned = " ".join(cleaned.split())
     return cleaned or None
+
+
+def _strip_trailing_target_clause(value: str) -> str:
+    return re.sub(
+        r"\s+en\s+[A-Za-z]{1,4}\s*[-_ ]?\s*\d{1,3}[A-Za-z]?"
+        r"(?:\s*(?:,|;|/|y|e|ademas|tambien)\s*"
+        r"[A-Za-z]{1,4}\s*[-_ ]?\s*\d{1,3}[A-Za-z]?)*\s*$",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    ).strip()
 
 
 def _follow_up_requested_value(message: str) -> str | None:

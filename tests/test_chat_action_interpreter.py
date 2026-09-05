@@ -147,6 +147,80 @@ def test_interprets_include_item() -> None:
     assert intent.scope == "ITEM"
 
 
+def test_interprets_exclude_multiple_targets() -> None:
+    intent = _interpret("Excluye C-4b y C-4c por favor")
+
+    assert intent.isAction is True
+    assert intent.actionType == "EXCLUDE_ITEM"
+    assert intent.targetReference == "C-4b"
+    assert intent.targetReferences == ["C-4b", "C-4c"]
+    assert intent.targetCount == 2
+    assert intent.classificationReason == "MULTI_TARGET_ACTION"
+
+
+def test_interprets_include_multiple_targets() -> None:
+    intent = _interpret("Vuelve a incluir PV-1 y PV-2")
+
+    assert intent.isAction is True
+    assert intent.actionType == "INCLUDE_ITEM"
+    assert intent.targetReference == "PV-1"
+    assert intent.targetReferences == ["PV-1", "PV-2"]
+    assert intent.targetCount == 2
+
+
+def test_interprets_system_multiple_targets_shared_value() -> None:
+    intent = _interpret("Pon V-9 y V-10 en S50")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.targetReference == "V-9"
+    assert intent.targetReferences == ["V-9", "V-10"]
+    assert intent.targetCount == 2
+    assert intent.requestedValue == "S50"
+    assert intent.classificationReason == "MULTI_TARGET_ACTION"
+
+
+def test_interprets_glass_multiple_targets_shared_attributes() -> None:
+    intent = _interpret("Cambia V-1, V-2 y V-3 a vidrio templado de 8 mm")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_GLASS"
+    assert intent.targetReferences == ["V-1", "V-2", "V-3"]
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.glass is not None
+    assert intent.requestedAttributes.glass.composition == "TEMPERED"
+    assert intent.requestedAttributes.glass.outerThicknessMm == 8
+
+
+def test_interprets_finish_multiple_targets_shared_attributes() -> None:
+    intent = _interpret("Pon acabado negro mate en C-1, C-2a y C-2b")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_FINISH"
+    assert intent.targetReferences == ["C-1", "C-2a", "C-2b"]
+    assert intent.requestedValue == "negro mate"
+    assert intent.requestedAttributes is not None
+    assert intent.requestedAttributes.finish is not None
+    assert intent.requestedAttributes.finish.color == "BLACK"
+    assert intent.requestedAttributes.finish.texture == "MATTE"
+
+
+def test_multi_target_deduplicates_repeated_references() -> None:
+    intent = _interpret("Excluye C-4b, C-4b y C-4c")
+
+    assert intent.isAction is True
+    assert intent.targetReferences == ["C-4b", "C-4c"]
+    assert intent.targetCount == 2
+
+
+def test_multi_target_accepts_semicolon_separator() -> None:
+    intent = _interpret("Excluye C-4b, C-4c; C-4a")
+
+    assert intent.isAction is True
+    assert intent.targetReferences == ["C-4b", "C-4c", "C-4a"]
+    assert intent.targetCount == 3
+
+
 def test_interprets_commercial_line_requirement() -> None:
     intent = _interpret("quiero toda la propuesta en premium")
 
@@ -377,6 +451,25 @@ def test_informational_queries_are_not_actions(message: str) -> None:
     assert intent.isAction is False
     assert intent.actionType == "UNKNOWN"
     assert intent.classificationReason == "INFORMATIONAL_GUARD"
+
+
+def test_multi_target_informational_query_is_not_action() -> None:
+    intent = _interpret("¿Qué sistema tienen V-9 y V-10?", scope="ITEM")
+
+    assert intent.isAction is False
+    assert intent.actionType == "UNKNOWN"
+    assert intent.targetReferences == ["V-9", "V-10"]
+    assert intent.classificationReason == "INFORMATIONAL_GUARD"
+
+
+def test_heterogeneous_system_batch_requires_clarification() -> None:
+    intent = _interpret("Cambia V-1 a S50 y V-2 a K50")
+
+    assert intent.isAction is False
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.targetReferences == ["V-1", "V-2"]
+    assert intent.requiresClarification is True
+    assert intent.classificationReason == "HETEROGENEOUS_BATCH_REQUIRES_CLARIFICATION"
 
 
 @pytest.mark.parametrize(
