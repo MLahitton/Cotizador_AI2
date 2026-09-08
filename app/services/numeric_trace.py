@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from pydantic import BaseModel, Field
 
@@ -23,6 +24,7 @@ SOURCE_GROUNDED_QUANTITY = "SOURCE_GROUNDED_QUANTITY"
 MODEL_EVIDENCE_QUANTITY = "MODEL_EVIDENCE_QUANTITY"
 MODEL_EXPLICIT_QUANTITY = "MODEL_EXPLICIT_QUANTITY"
 MODEL_INFERRED_QUANTITY = "MODEL_INFERRED_QUANTITY"
+COMMERCIAL_ROW_SINGLE_UNIT_INFERRED = "COMMERCIAL_ROW_SINGLE_UNIT_INFERRED"
 
 
 class NumericCandidateTrace(BaseModel):
@@ -182,8 +184,17 @@ def _element_trace(
                 if element.quantity_confidence is not None
                 else element.confidence
             ),
+            resolution_reason=_final_quantity_resolution_reason(element),
         ),
     )
+
+
+def _final_quantity_resolution_reason(element: GeminiElementEnrichment) -> str:
+    notes = element.quantity_notes or ""
+    for reason in (COMMERCIAL_ROW_SINGLE_UNIT_INFERRED,):
+        if reason in notes:
+            return reason
+    return "MODEL_OUTPUT"
 
 
 def _measurement_candidates(
@@ -289,7 +300,7 @@ def _text_numeric_candidates(
 ) -> list[NumericCandidateTrace]:
     candidates: list[NumericCandidateTrace] = []
     for semantic_role, pattern in _TEXT_PATTERNS:
-        for match in pattern.finditer(text):
+        for match in pattern.finditer(_fold_text(text)):
             candidates.append(
                 NumericCandidateTrace(
                     element_temporary_id=element.temporary_id,
@@ -359,11 +370,33 @@ _TEXT_PATTERNS = (
     ),
     (
         "COMPONENT_COUNT",
-        re.compile(rf"\b({_NUMBER})\s*(?:cuerpos?|secciones?|tramos?)\b", flags=re.IGNORECASE),
+        re.compile(
+            rf"\b({_NUMBER})\s*"
+            r"(?:cuerpos?|secciones?|tramos?|paneles?|hojas?)\b",
+            flags=re.IGNORECASE,
+        ),
+    ),
+    (
+        "COMPONENT_COUNT",
+        re.compile(
+            rf"\b(?:n\W*|nro\.?\s*|n(?:u|ú)mero\s+de\s+)?"
+            rf"(?:cuerpos?|secciones?|tramos?|paneles?|hojas?)\s*[:=]?\s*({_NUMBER})\b",
+            flags=re.IGNORECASE,
+        ),
     ),
     (
         "SECTION_COUNT",
-        re.compile(rf"\b({_NUMBER})\s*(?:modulos?|sections?)\b", flags=re.IGNORECASE),
+        re.compile(
+            rf"\b({_NUMBER})\s*(?:m(?:o|ó)dulos?|modules?|sections?)\b",
+            flags=re.IGNORECASE,
+        ),
+    ),
+    (
+        "SECTION_COUNT",
+        re.compile(
+            rf"\b(?:m(?:o|ó)dulos?|modules?|sections?)\s*[:=]?\s*({_NUMBER})\b",
+            flags=re.IGNORECASE,
+        ),
     ),
     (
         "GLASS_THICKNESS",
@@ -437,3 +470,11 @@ def _evidence_source_type(evidence: GeminiEnrichmentEvidenceNote) -> str:
 
 def _compact(value: str) -> str:
     return value.casefold().strip().replace("_", "").replace("-", "").replace(" ", "")
+
+
+def _fold_text(value: str) -> str:
+    return "".join(
+        character
+        for character in unicodedata.normalize("NFD", value)
+        if unicodedata.category(character) != "Mn"
+    )

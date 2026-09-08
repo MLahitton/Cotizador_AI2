@@ -670,6 +670,233 @@ def test_mapper_does_not_warn_for_reported_area_without_dimensions() -> None:
     assert not any(warning.code == "MEASUREMENT_AREA_MISMATCH" for warning in result.warnings)
 
 
+@pytest.mark.parametrize(
+    ("width", "height", "area"),
+    [
+        (0.9, 1.45, 1.305),
+        (1.2, 1.5, 1.8),
+        (5.8, 2.1, 12.18),
+    ],
+)
+def test_mapper_accepts_casa_pereira_real_area_examples(
+    width: float,
+    height: float,
+    area: float,
+) -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                measurements=[
+                    GeminiMeasurement(type="width", value=width, unit="m"),
+                    GeminiMeasurement(type="height", value=height, unit="m"),
+                    GeminiMeasurement(type="custom", label="M2", value=area, unit="m2"),
+                ]
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert not any(warning.code == "MEASUREMENT_AREA_MISMATCH" for warning in result.warnings)
+
+
+def test_mapper_warns_for_wrong_row_area_combination_without_overwriting() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="v-01",
+                measurements=[
+                    GeminiMeasurement(type="width", value=0.9, unit="m"),
+                    GeminiMeasurement(type="height", value=2.1, unit="m"),
+                    GeminiMeasurement(type="custom", label="M2", value=1.305, unit="m2"),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert result.elements[0].measurements[2].value == 1.305
+    assert any(warning.code == "MEASUREMENT_AREA_MISMATCH" for warning in result.warnings)
+
+
+def test_mapper_normalizes_units_for_area_consistency() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                measurements=[
+                    GeminiMeasurement(type="width", value=120, unit="cm"),
+                    GeminiMeasurement(type="height", value=1500, unit="mm"),
+                    GeminiMeasurement(type="custom", label="AREA", value=1_800_000, unit="mm2"),
+                ]
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert not any(warning.code == "MEASUREMENT_AREA_MISMATCH" for warning in result.warnings)
+
+
+def test_mapper_uses_measurement_text_to_identify_total_area() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                quantity=2,
+                measurements=[
+                    GeminiMeasurement(type="custom", text="AREA UNITARIA", value=1.8, unit="m2"),
+                    GeminiMeasurement(type="custom", text="AREA TOTAL", value=3.6, unit="m2"),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert [measurement.type for measurement in result.elements[0].measurements] == [
+        "area",
+        "area",
+    ]
+    assert not any(
+        warning.code == "MEASUREMENT_TOTAL_AREA_MISMATCH"
+        for warning in result.warnings
+    )
+
+
+def test_mapper_warns_when_total_area_does_not_match_unit_area_times_quantity() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="v-total",
+                quantity=3,
+                measurements=[
+                    GeminiMeasurement(type="custom", label="AREA UNITARIA", value=1.8, unit="m2"),
+                    GeminiMeasurement(type="custom", label="AREA TOTAL", value=9.0, unit="m2"),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert [measurement.value for measurement in result.elements[0].measurements] == [1.8, 9.0]
+    warning = next(
+        warning
+        for warning in result.warnings
+        if warning.code == "MEASUREMENT_TOTAL_AREA_MISMATCH"
+    )
+    assert warning.element_ids == ["v-total"]
+    assert "5.40 m2" in warning.message
+
+
+def test_mapper_does_not_warn_when_total_area_matches_unit_area_times_quantity() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                quantity=3,
+                measurements=[
+                    GeminiMeasurement(type="custom", label="AREA UNITARIA", value=1.8, unit="m2"),
+                    GeminiMeasurement(type="custom", label="TOTAL M2", value=5.4, unit="m2"),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert not any(
+        warning.code == "MEASUREMENT_TOTAL_AREA_MISMATCH"
+        for warning in result.warnings
+    )
+
+
+def test_mapper_skips_total_area_check_when_quantity_is_null() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                measurements=[
+                    GeminiMeasurement(type="custom", label="AREA UNITARIA", value=1.8, unit="m2"),
+                    GeminiMeasurement(type="custom", label="AREA TOTAL", value=9.0, unit="m2"),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert not any(
+        warning.code == "MEASUREMENT_TOTAL_AREA_MISMATCH"
+        for warning in result.warnings
+    )
+
+
+def test_mapper_skips_total_area_check_when_quantity_is_ambiguous() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                quantity=3,
+                quantity_status=ExtractionStatus.AMBIGUOUS,
+                measurements=[
+                    GeminiMeasurement(type="custom", label="AREA UNITARIA", value=1.8, unit="m2"),
+                    GeminiMeasurement(type="custom", label="AREA TOTAL", value=9.0, unit="m2"),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert not any(
+        warning.code == "MEASUREMENT_TOTAL_AREA_MISMATCH"
+        for warning in result.warnings
+    )
+
+
+def test_mapper_warns_for_multiple_incompatible_measurements_without_reordering() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                measurements=[
+                    GeminiMeasurement(type="width", value=1.0, unit="m"),
+                    GeminiMeasurement(type="width", value=2.0, unit="m"),
+                    GeminiMeasurement(type="height", value=1.5, unit="m"),
+                ]
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert [measurement.value for measurement in result.elements[0].measurements] == [
+        1.0,
+        2.0,
+        1.5,
+    ]
+    assert any(warning.code == "MEASUREMENT_CONFLICT" for warning in result.warnings)
+
+
+def test_mapper_preserves_explicit_area_when_total_area_check_warns() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                quantity=2,
+                measurements=[
+                    GeminiMeasurement(type="custom", label="AREA UNITARIA", value=1.8, unit="m2"),
+                    GeminiMeasurement(type="custom", label="M2 TOTAL", value=9.0, unit="m2"),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert [measurement.value for measurement in result.elements[0].measurements] == [1.8, 9.0]
+    assert [measurement.raw_label for measurement in result.elements[0].measurements] == [
+        "AREA UNITARIA",
+        "M2 TOTAL",
+    ]
+
+
 def test_mapper_propagates_single_element_evidence_to_measurements() -> None:
     extraction = GeminiExtraction(
         elements=[

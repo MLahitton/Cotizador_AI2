@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -24,7 +25,9 @@ SOURCE_MODEL_AGREE = "SOURCE_MODEL_AGREE"
 MODEL_QUANTITY_NOT_SOURCE_GROUNDED = "MODEL_QUANTITY_NOT_SOURCE_GROUNDED"
 NO_SOURCE_GROUNDING_AVAILABLE = "NO_SOURCE_GROUNDING_AVAILABLE"
 QUANTITY_GROUNDING_CONFLICT = "QUANTITY_GROUNDING_CONFLICT"
+COMPONENT_COUNT_COLLISION = "COMPONENT_COUNT_COLLISION"
 NO_MODEL_QUANTITY = "NO_MODEL_QUANTITY"
+COMMERCIAL_ROW_SINGLE_UNIT_INFERRED = "COMMERCIAL_ROW_SINGLE_UNIT_INFERRED"
 SPREADSHEET_CELL = "SPREADSHEET_CELL"
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
@@ -32,7 +35,38 @@ _QUANTITY_RE = re.compile(
     rf"\b(?:cantidad(?:\s+total)?|cant\.?|cnt|qty|unidades|und)\s*:?\s*({_NUMBER})\b",
     flags=re.IGNORECASE,
 )
+_COMPONENT_COUNT_PATTERNS = (
+    re.compile(
+        rf"\b({_NUMBER})\s*(?:cuerpos?|secciones?|tramos?|paneles?|hojas?)\b",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        rf"\b(?:n\W*|nro\.?\s*|n(?:u|ú)mero\s+de\s+)?"
+        rf"(?:cuerpos?|secciones?|tramos?|paneles?|hojas?)\s*[:=]?\s*({_NUMBER})\b",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        rf"\b({_NUMBER})\s*(?:m(?:o|ó)dulos?|modules?|sections?)\b",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        rf"\b(?:m(?:o|ó)dulos?|modules?|sections?)\s*[:=]?\s*({_NUMBER})\b",
+        flags=re.IGNORECASE,
+    ),
+)
 _FORMAL_REFERENCE_RE = re.compile(r"\b([A-Z]{1,4})[\s._-]*(\d{1,4})([A-Z]?)\b")
+_COMMERCIAL_ROW_SINGLE_UNIT_CONFIDENCE = 0.68
+_GROUP_DESCRIPTION_RE = re.compile(
+    r"\b(?:ventanas|puertas|fijos|varios|varias|similares|grupo|conjunto)\b",
+    flags=re.IGNORECASE,
+)
+_INDIVIDUAL_DESCRIPTION_RE = re.compile(
+    r"\b(?:ventana|puerta|fijo|proyectante|batiente|corrediza|corredizo|"
+    r"mampara|vano|elemento)\b",
+    flags=re.IGNORECASE,
+)
+_WIDTH_RE = re.compile(r"\b(?:ancho|width)\b|\b(?:w)\b", flags=re.IGNORECASE)
+_HEIGHT_RE = re.compile(r"\b(?:alto|altura|height)\b|\b(?:h)\b", flags=re.IGNORECASE)
 
 
 class QuantitySourceFileSpec(Protocol):
@@ -98,7 +132,7 @@ def validate_enrichment_quantities(
         )
         elements.append(updated)
         decisions.append(decision)
-        if decision.action in {"REPLACE", "MARK_AMBIGUOUS", "DOWNGRADE"}:
+        if decision.action in {"REPLACE", "MARK_AMBIGUOUS", "DOWNGRADE", "REJECT_QUANTITY"}:
             warnings.append(
                 f"{decision.reason}: {element.temporary_id} "
                 f"reference={element.reference!r} quantity={element.quantity!r}."
@@ -120,8 +154,114 @@ def validate_element_quantity(
     )
     model_evidence_candidates = tuple(_model_evidence_quantity_candidates(element))
     model_quantity = _numeric_value(element.quantity)
+    distinct_source_values = _distinct_values(source_candidates)
+    distinct_model_evidence_values = _distinct_values(model_evidence_candidates)
 
     if model_quantity is None:
+        if len(distinct_source_values) > 1:
+            updated = _replace_quantity(
+                element,
+                quantity=element.quantity,
+                status=ExtractionStatus.AMBIGUOUS,
+                confidence=_downgraded_confidence(element.confidence),
+                note=(
+                    f"{QUANTITY_GROUNDING_CONFLICT}: missing model quantity "
+                    "does not match a single independent source quantity candidate."
+                ),
+            )
+            return updated, _decision(
+                element,
+                final_quantity=element.quantity,
+                action="MARK_AMBIGUOUS",
+                reason=QUANTITY_GROUNDING_CONFLICT,
+                source_candidates=source_candidates,
+                model_evidence_candidates=model_evidence_candidates,
+            )
+
+        if len(distinct_source_values) == 1:
+            grounded_quantity = distinct_source_values[0]
+            updated = _replace_quantity(
+                element,
+                quantity=grounded_quantity,
+                status=ExtractionStatus.EXPLICIT,
+                note=(
+                    f"{SOURCE_INDEPENDENT_GROUNDED_WINS}: filled missing model "
+                    f"quantity with independent source quantity {grounded_quantity!r}."
+                ),
+            )
+            return updated, _decision(
+                element,
+                final_quantity=grounded_quantity,
+                action="REPLACE",
+                reason=SOURCE_INDEPENDENT_GROUNDED_WINS,
+                source_candidates=source_candidates,
+                model_evidence_candidates=model_evidence_candidates,
+                selected_source_candidate=source_candidates[0],
+            )
+
+        if len(distinct_model_evidence_values) > 1:
+            updated = _replace_quantity(
+                element,
+                quantity=element.quantity,
+                status=ExtractionStatus.AMBIGUOUS,
+                confidence=_downgraded_confidence(element.confidence),
+                note=(
+                    f"{QUANTITY_GROUNDING_CONFLICT}: missing model quantity "
+                    "has multiple model evidence quantity candidates."
+                ),
+            )
+            return updated, _decision(
+                element,
+                final_quantity=element.quantity,
+                action="MARK_AMBIGUOUS",
+                reason=QUANTITY_GROUNDING_CONFLICT,
+                source_candidates=source_candidates,
+                model_evidence_candidates=model_evidence_candidates,
+            )
+
+        if len(distinct_model_evidence_values) == 1:
+            evidence_quantity = distinct_model_evidence_values[0]
+            updated = _replace_quantity(
+                element,
+                quantity=evidence_quantity,
+                status=ExtractionStatus.EXPLICIT,
+                note=(
+                    f"{MODEL_EVIDENCE_QUANTITY}: filled missing model quantity "
+                    f"with explicit evidence quantity {evidence_quantity!r}."
+                ),
+            )
+            return updated, _decision(
+                element,
+                final_quantity=evidence_quantity,
+                action="REPLACE",
+                reason=MODEL_EVIDENCE_QUANTITY,
+                source_candidates=source_candidates,
+                model_evidence_candidates=model_evidence_candidates,
+            )
+
+        inferred_candidate = _commercial_row_single_unit_candidate(element)
+        if inferred_candidate is not None:
+            updated = _replace_quantity(
+                element,
+                quantity=1,
+                status=ExtractionStatus.INFERRED,
+                confidence=_COMMERCIAL_ROW_SINGLE_UNIT_CONFIDENCE,
+                note=(
+                    f"{COMMERCIAL_ROW_SINGLE_UNIT_INFERRED}: inferred one "
+                    "commercial unit because the item has individual row evidence, "
+                    "own dimensions, and no explicit quantity signal."
+                ),
+            )
+            return updated, _decision(
+                element,
+                final_quantity=1,
+                action="INFER",
+                reason=COMMERCIAL_ROW_SINGLE_UNIT_INFERRED,
+                source_candidates=source_candidates,
+                model_evidence_candidates=model_evidence_candidates,
+                selected_source_candidate=inferred_candidate,
+            )
+
         return element, _decision(
             element,
             final_quantity=element.quantity,
@@ -131,7 +271,6 @@ def validate_element_quantity(
             model_evidence_candidates=model_evidence_candidates,
         )
 
-    distinct_source_values = _distinct_values(source_candidates)
     if len(distinct_source_values) > 1:
         updated = _replace_quantity(
             element,
@@ -189,6 +328,42 @@ def validate_element_quantity(
             selected_source_candidate=source_candidates[0],
         )
 
+    has_component_count_collision = _has_component_count_collision(element, model_quantity)
+    has_quantity_evidence = _has_matching_quantity_evidence(
+        model_evidence_candidates,
+        model_quantity,
+    )
+    if has_quantity_evidence:
+        return element, _decision(
+            element,
+            final_quantity=element.quantity,
+            action="KEEP",
+            reason=MODEL_EVIDENCE_QUANTITY,
+            source_candidates=source_candidates,
+            model_evidence_candidates=model_evidence_candidates,
+        )
+
+    if has_component_count_collision:
+        updated = _replace_quantity(
+            element,
+            quantity=None,
+            status=ExtractionStatus.AMBIGUOUS,
+            confidence=_downgraded_confidence(element.confidence),
+            note=(
+                f"{COMPONENT_COUNT_COLLISION}: model quantity {element.quantity!r} "
+                "matches a local component/panel/module count, not a commercial "
+                "quantity label-value pair."
+            ),
+        )
+        return updated, _decision(
+            element,
+            final_quantity=None,
+            action="REJECT_QUANTITY",
+            reason=COMPONENT_COUNT_COLLISION,
+            source_candidates=source_candidates,
+            model_evidence_candidates=model_evidence_candidates,
+        )
+
     updated = _replace_quantity(
         element,
         quantity=element.quantity,
@@ -207,6 +382,145 @@ def validate_element_quantity(
         source_candidates=source_candidates,
         model_evidence_candidates=model_evidence_candidates,
     )
+
+
+def _commercial_row_single_unit_candidate(
+    element: GeminiElementEnrichment,
+) -> QuantityGroundingCandidate | None:
+    if _has_quantity_label_in_text(element):
+        return None
+    if not _has_own_width_and_height(element):
+        return None
+
+    has_reference = _canonical_reference(element.reference) is not None
+    has_context = bool((element.occurrence_context or "").strip())
+    has_description = bool(_identity_text(element))
+    has_row_evidence = _has_row_evidence(element)
+    looks_individual = _looks_individual_description(element)
+
+    if has_reference and has_row_evidence and (has_context or has_description):
+        return _commercial_row_candidate(element)
+    if has_description and looks_individual and has_row_evidence and has_context:
+        return _commercial_row_candidate(element)
+    return None
+
+
+def _commercial_row_candidate(element: GeminiElementEnrichment) -> QuantityGroundingCandidate:
+    first_evidence = next(iter(element.evidence), None)
+    return QuantityGroundingCandidate(
+        temporary_id=element.temporary_id,
+        reference=element.reference,
+        value=1,
+        source_id=first_evidence.source_id if first_evidence else None,
+        source_file_name=None,
+        page_number=first_evidence.page_number if first_evidence else None,
+        sheet_name=first_evidence.sheet_name if first_evidence else None,
+        cell_range=first_evidence.cell_range if first_evidence else None,
+        region=first_evidence.region if first_evidence else None,
+        raw_text=_commercial_row_raw_text(element),
+        field_path="commercial_row",
+        origin=COMMERCIAL_ROW_SINGLE_UNIT_INFERRED,
+        source_type=MODEL_INFERRED_QUANTITY,
+        status=ExtractionStatus.INFERRED,
+    )
+
+
+def _commercial_row_raw_text(element: GeminiElementEnrichment) -> str:
+    for evidence in element.evidence:
+        text = evidence.text or evidence.visual_description
+        if text:
+            return text
+    return "commercial row with own dimensions"
+
+
+def _has_quantity_label_in_text(element: GeminiElementEnrichment) -> bool:
+    return any(_QUANTITY_RE.search(text) for text in _element_text_fragments(element))
+
+
+def _has_own_width_and_height(element: GeminiElementEnrichment) -> bool:
+    has_width = False
+    has_height = False
+    for measurement in element.measurements:
+        if measurement.value is None:
+            continue
+        label = " ".join(
+            value
+            for value in (measurement.type, measurement.raw_label, measurement.text)
+            if value
+        )
+        if _WIDTH_RE.search(label):
+            has_width = True
+        if _HEIGHT_RE.search(label):
+            has_height = True
+    return has_width and has_height
+
+
+def _has_row_evidence(element: GeminiElementEnrichment) -> bool:
+    for evidence in element.evidence:
+        if (
+            evidence.cell_range
+            or evidence.region is not None
+            or evidence.source_id
+            or evidence.page_number is not None
+            or evidence.sheet_name
+        ):
+            return True
+        if (evidence.text or evidence.visual_description or "").strip():
+            return True
+    return False
+
+
+def _looks_individual_description(element: GeminiElementEnrichment) -> bool:
+    identity = _fold_text(_identity_text(element)).casefold()
+    if not identity:
+        return False
+    if _GROUP_DESCRIPTION_RE.search(identity):
+        return False
+    return _INDIVIDUAL_DESCRIPTION_RE.search(identity) is not None
+
+
+def _identity_text(element: GeminiElementEnrichment) -> str:
+    return " ".join(
+        value
+        for value in (
+            element.name,
+            element.description,
+            element.category_raw,
+            element.functional_type_raw,
+            element.operation_raw,
+        )
+        if value
+    ).strip()
+
+
+def _element_text_fragments(element: GeminiElementEnrichment) -> list[str]:
+    fragments = [
+        value
+        for value in (
+            element.reference,
+            element.name,
+            element.description,
+            element.category_raw,
+            element.functional_type_raw,
+            element.operation_raw,
+            element.modulation_raw,
+            element.geometry_raw,
+            element.configuration_raw,
+            element.occurrence_context,
+            element.variant_context,
+            element.notes,
+            element.quantity_notes,
+        )
+        if value
+    ]
+    fragments.extend(note for note in element.evidence_notes if note)
+    for evidence in element.evidence:
+        fragments.extend(
+            value
+            for value in (evidence.text, evidence.visual_description, evidence.notes)
+            if value
+        )
+    return fragments
 
 
 def _model_evidence_quantity_candidates(
@@ -248,6 +562,40 @@ def _source_candidates_for_element(
         return []
     return list(source_candidates_by_reference.get(reference, []))
 
+
+def _has_matching_quantity_evidence(
+    candidates: tuple[QuantityGroundingCandidate, ...],
+    quantity: int | float,
+) -> bool:
+    return any(_same_number(candidate.value, quantity) for candidate in candidates)
+
+
+def _has_component_count_collision(
+    element: GeminiElementEnrichment,
+    quantity: int | float,
+) -> bool:
+    return any(_same_number(value, quantity) for value in _component_count_values(element))
+
+
+def _component_count_values(element: GeminiElementEnrichment) -> list[int | float]:
+    values: list[int | float] = []
+    if element.panel_count is not None:
+        values.append(element.panel_count)
+
+    for component in element.components:
+        value = _numeric_value(component.quantity)
+        if value is not None:
+            values.append(value)
+
+    for evidence in element.evidence:
+        text = evidence.text or evidence.visual_description
+        if not text:
+            continue
+        for pattern in _COMPONENT_COUNT_PATTERNS:
+            for match in pattern.finditer(_fold_text(text)):
+                values.append(_parse_number(match.group(1)))
+
+    return values
 
 def _replace_quantity(
     element: GeminiElementEnrichment,
@@ -415,6 +763,14 @@ def _canonical_reference(reference: str | None) -> str | None:
         return None
     prefix, number, suffix = match.groups()
     return f"{prefix}-{int(number):02d}{suffix}"
+
+
+def _fold_text(value: str) -> str:
+    return "".join(
+        character
+        for character in unicodedata.normalize("NFD", value)
+        if unicodedata.category(character) != "Mn"
+    )
 
 
 def _parse_number(value: str) -> int | float:

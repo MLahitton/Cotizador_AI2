@@ -5,7 +5,9 @@ from openpyxl import Workbook
 from app.models.common import ExtractionStatus
 from app.models.gemini_enrichment import (
     GeminiElementEnrichment,
+    GeminiEnrichmentComponent,
     GeminiEnrichmentEvidenceNote,
+    GeminiEnrichmentMeasurement,
     GeminiEnrichmentResult,
 )
 from app.services.numeric_trace import (
@@ -16,10 +18,9 @@ from app.services.numeric_trace import (
     build_numeric_resolution_trace,
 )
 from app.services.quantity_grounding import (
-    MODEL_EVIDENCE_QUANTITY as GROUNDING_MODEL_EVIDENCE_QUANTITY,
-)
-from app.services.quantity_grounding import (
-    NO_SOURCE_GROUNDING_AVAILABLE,
+    COMMERCIAL_ROW_SINGLE_UNIT_INFERRED,
+    COMPONENT_COUNT_COLLISION,
+    NO_MODEL_QUANTITY,
     QUANTITY_GROUNDING_CONFLICT,
     SOURCE_INDEPENDENT_GROUNDED_WINS,
     SOURCE_INDEPENDENT_QUANTITY,
@@ -28,6 +29,9 @@ from app.services.quantity_grounding import (
     QuantityGroundingCandidate,
     build_source_independent_quantity_candidates,
     validate_enrichment_quantities,
+)
+from app.services.quantity_grounding import (
+    MODEL_EVIDENCE_QUANTITY as GROUNDING_MODEL_EVIDENCE_QUANTITY,
 )
 
 
@@ -140,7 +144,7 @@ def test_matching_source_independent_quantity_stays_explicit() -> None:
     assert result.warnings == []
 
 
-def test_model_evidence_quantity_without_independent_source_is_downgraded() -> None:
+def test_model_evidence_quantity_without_independent_source_stays_explicit() -> None:
     enrichment = GeminiEnrichmentResult(
         elements=[
             GeminiElementEnrichment(
@@ -165,11 +169,11 @@ def test_model_evidence_quantity_without_independent_source_is_downgraded() -> N
     assert result.elements[0].quantity == 1
     assert result.elements[0].status == ExtractionStatus.EXPLICIT
     assert result.elements[0].confidence == 0.9
-    assert result.elements[0].quantity_status == ExtractionStatus.INFERRED
-    assert result.elements[0].quantity_confidence == 0.5
-    assert NO_SOURCE_GROUNDING_AVAILABLE in result.elements[0].missing_or_unknown
-    assert decisions[0].action == "DOWNGRADE"
-    assert decisions[0].reason == NO_SOURCE_GROUNDING_AVAILABLE
+    assert result.elements[0].quantity_status is None
+    assert result.elements[0].quantity_confidence is None
+    assert result.elements[0].missing_or_unknown == []
+    assert decisions[0].action == "KEEP"
+    assert decisions[0].reason == GROUNDING_MODEL_EVIDENCE_QUANTITY
     assert decisions[0].source_candidates == ()
     assert decisions[0].model_evidence_candidates[0].value == 1
 
@@ -280,6 +284,128 @@ def test_xlsx_source_independent_candidates_use_row_reference_and_quantity_label
     assert candidates["V-02"][0].value == 5
 
 
+
+
+def test_component_count_labels_reject_model_quantity_without_quantity_support() -> None:
+    examples = [
+        "PV-01 N° Cuerpos 5",
+        "PV-01 N° Cuerpos: 5",
+        "PV-01 Nº Cuerpos 5",
+        "PV-01 Numero de cuerpos = 5",
+        "PV-01 Número de cuerpos = 5",
+        "PV-01 Cuerpos 5",
+        "PV-01 5 cuerpos",
+        "PV-01 Paneles 5",
+        "PV-01 Módulos: 5",
+        "PV-01 Hojas 5",
+    ]
+
+    for text in examples:
+        result, decisions = validate_enrichment_quantities(
+            GeminiEnrichmentResult(
+                elements=[
+                    GeminiElementEnrichment(
+                        temporary_id="item",
+                        reference="PV-01",
+                        quantity=5,
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.95,
+                        evidence=[GeminiEnrichmentEvidenceNote(type="table", text=text)],
+                    )
+                ]
+            )
+        )
+
+        assert result.elements[0].quantity is None, text
+        assert result.elements[0].quantity_status == ExtractionStatus.AMBIGUOUS
+        assert result.elements[0].quantity_confidence == 0.5
+        assert COMPONENT_COUNT_COLLISION in result.elements[0].missing_or_unknown
+        assert decisions[0].action == "REJECT_QUANTITY"
+        assert decisions[0].reason == COMPONENT_COUNT_COLLISION
+        assert decisions[0].final_quantity is None
+
+
+def test_strong_quantity_labels_keep_model_quantity_without_component_collision() -> None:
+    examples = [
+        ("PV-01 Cantidad 5", 5),
+        ("PV-01 Cantidad: 5", 5),
+        ("PV-01 Unidades 3", 3),
+        ("PV-01 QTY 4", 4),
+    ]
+
+    for text, quantity in examples:
+        result, decisions = validate_enrichment_quantities(
+            GeminiEnrichmentResult(
+                elements=[
+                    GeminiElementEnrichment(
+                        temporary_id="item",
+                        reference="PV-01",
+                        quantity=quantity,
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.95,
+                        evidence=[GeminiEnrichmentEvidenceNote(type="table", text=text)],
+                    )
+                ]
+            )
+        )
+
+        assert result.elements[0].quantity == quantity, text
+        assert result.elements[0].quantity_status is None
+        assert decisions[0].reason == GROUNDING_MODEL_EVIDENCE_QUANTITY
+
+
+def test_quantity_label_wins_when_component_count_has_different_value() -> None:
+    result, decisions = validate_enrichment_quantities(
+        GeminiEnrichmentResult(
+            elements=[
+                GeminiElementEnrichment(
+                    temporary_id="item",
+                    reference="PV-01",
+                    quantity=2,
+                    status=ExtractionStatus.EXPLICIT,
+                    confidence=0.95,
+                    evidence=[
+                        GeminiEnrichmentEvidenceNote(
+                            type="table",
+                            text="PV-01 Cantidad 2 N° Cuerpos 5",
+                        )
+                    ],
+                )
+            ]
+        )
+    )
+
+    assert result.elements[0].quantity == 2
+    assert result.elements[0].quantity_status is None
+    assert decisions[0].reason == GROUNDING_MODEL_EVIDENCE_QUANTITY
+
+
+def test_component_count_quantity_is_rejected_even_when_other_quantity_label_exists() -> None:
+    result, decisions = validate_enrichment_quantities(
+        GeminiEnrichmentResult(
+            elements=[
+                GeminiElementEnrichment(
+                    temporary_id="item",
+                    reference="PV-01",
+                    quantity=5,
+                    status=ExtractionStatus.EXPLICIT,
+                    confidence=0.95,
+                    evidence=[
+                        GeminiEnrichmentEvidenceNote(
+                            type="table",
+                            text="PV-01 Cantidad 2 N° Cuerpos 5",
+                        )
+                    ],
+                )
+            ]
+        )
+    )
+
+    assert result.elements[0].quantity is None
+    assert result.elements[0].quantity_status == ExtractionStatus.AMBIGUOUS
+    assert decisions[0].reason == COMPONENT_COUNT_COLLISION
+
+
 def test_numeric_trace_marks_model_evidence_and_notes_separately() -> None:
     trace = build_numeric_resolution_trace(
         GeminiEnrichmentResult(
@@ -316,6 +442,303 @@ def test_numeric_trace_marks_model_evidence_and_notes_separately() -> None:
     assert quantity_candidates[2].source_type == MODEL_NOTE
     assert quantity_candidates[2].status == ExtractionStatus.INFERRED
     assert quantity_candidates[2].grounding_type == MODEL_INFERRED_QUANTITY
+
+
+def test_commercial_row_without_quantity_infers_single_unit_and_keeps_panel_count() -> None:
+    result, decisions = validate_enrichment_quantities(
+        GeminiEnrichmentResult(
+            elements=[
+                _commercial_row_element(
+                    temporary_id="pv-01-sotano",
+                    reference="PV-01",
+                    context="SOTANO",
+                    width=5.25,
+                    height=2.50,
+                    panel_count=5,
+                    text="PV-01 SOTANO 5.25 x 2.50 N Cuerpos 5",
+                )
+            ]
+        )
+    )
+
+    element = result.elements[0]
+    assert element.quantity == 1
+    assert element.quantity_status == ExtractionStatus.INFERRED
+    assert element.quantity_confidence == 0.68
+    assert element.panel_count == 5
+    assert COMMERCIAL_ROW_SINGLE_UNIT_INFERRED in element.quantity_notes
+    assert decisions[0].action == "INFER"
+    assert decisions[0].reason == COMMERCIAL_ROW_SINGLE_UNIT_INFERRED
+    assert decisions[0].selected_source_candidate is not None
+    assert decisions[0].selected_source_candidate.value == 1
+
+    trace = build_numeric_resolution_trace(result, stage="test")
+    assert trace.elements[0].final_quantity.resolution_reason == (
+        COMMERCIAL_ROW_SINGLE_UNIT_INFERRED
+    )
+
+
+def test_casa_pereira_commercial_rows_infer_one_without_using_component_counts() -> None:
+    rows = [
+        _commercial_row_element(
+            temporary_id="pv-01-sotano",
+            reference="PV-01",
+            context="SOTANO",
+            width=5.25,
+            height=2.50,
+            panel_count=5,
+            text="PV-01 SOTANO 5.25 x 2.50 N Cuerpos 5",
+        ),
+        _commercial_row_element(
+            temporary_id="v-01-sotano",
+            reference="V-01",
+            context="SOTANO",
+            width=0.90,
+            height=1.45,
+            panel_count=2,
+            text="V-01 SOTANO 0.90 x 1.45 N Cuerpos 2",
+        ),
+        _commercial_row_element(
+            temporary_id="v-03-sotano",
+            reference="V-03",
+            context="SOTANO",
+            width=0.80,
+            height=0.40,
+            panel_count=2,
+            text="V-03 SOTANO 0.80 x 0.40 N Cuerpos 2 Apertura: 1 fijo + 1 rejilla",
+            components=[
+                GeminiEnrichmentComponent(name="fijo", quantity=1),
+                GeminiEnrichmentComponent(name="rejilla", quantity=1),
+            ],
+        ),
+    ]
+
+    result, decisions = validate_enrichment_quantities(GeminiEnrichmentResult(elements=rows))
+
+    assert [element.quantity for element in result.elements] == [1, 1, 1]
+    assert [element.quantity_status for element in result.elements] == [
+        ExtractionStatus.INFERRED,
+        ExtractionStatus.INFERRED,
+        ExtractionStatus.INFERRED,
+    ]
+    assert [element.panel_count for element in result.elements] == [5, 2, 2]
+    assert result.elements[2].components[0].quantity == 1
+    assert result.elements[2].components[1].quantity == 1
+    assert [decision.reason for decision in decisions] == [
+        COMMERCIAL_ROW_SINGLE_UNIT_INFERRED,
+        COMMERCIAL_ROW_SINGLE_UNIT_INFERRED,
+        COMMERCIAL_ROW_SINGLE_UNIT_INFERRED,
+    ]
+
+
+def test_commercial_row_without_formal_reference_can_infer_single_unit() -> None:
+    result, decisions = validate_enrichment_quantities(
+        GeminiEnrichmentResult(
+            elements=[
+                _commercial_row_element(
+                    temporary_id="ventana-bano",
+                    reference=None,
+                    name="Ventana bano",
+                    context="BANO",
+                    width=0.80,
+                    height=0.40,
+                    panel_count=2,
+                    text="Ventana bano 0.80 x 0.40 2 cuerpos",
+                )
+            ]
+        )
+    )
+
+    assert result.elements[0].quantity == 1
+    assert result.elements[0].quantity_status == ExtractionStatus.INFERRED
+    assert decisions[0].reason == COMMERCIAL_ROW_SINGLE_UNIT_INFERRED
+
+
+def test_explicit_quantity_evidence_wins_over_single_row_fallback() -> None:
+    result, decisions = validate_enrichment_quantities(
+        GeminiEnrichmentResult(
+            elements=[
+                _commercial_row_element(
+                    temporary_id="pv-01",
+                    reference="PV-01",
+                    context="SOTANO",
+                    width=5.25,
+                    height=2.50,
+                    panel_count=5,
+                    quantity=None,
+                    text="PV-01 SOTANO Cantidad 3 N Cuerpos 5",
+                )
+            ]
+        )
+    )
+
+    assert result.elements[0].quantity == 3
+    assert result.elements[0].quantity_status == ExtractionStatus.EXPLICIT
+    assert result.elements[0].panel_count == 5
+    assert decisions[0].reason == GROUNDING_MODEL_EVIDENCE_QUANTITY
+
+
+def test_model_quantity_explicit_precedence_over_commercial_row_fallback() -> None:
+    examples = [
+        ("PV-01 Cantidad 2 N Cuerpos 5", 2, 5),
+        ("PV-02 Cantidad 4 N Cuerpos 2", 4, 2),
+    ]
+
+    for index, (text, quantity, panel_count) in enumerate(examples, start=1):
+        result, decisions = validate_enrichment_quantities(
+            GeminiEnrichmentResult(
+                elements=[
+                    _commercial_row_element(
+                        temporary_id=f"item-{index}",
+                        reference=f"PV-0{index}",
+                        context="SOTANO",
+                        width=1.0,
+                        height=1.0,
+                        panel_count=panel_count,
+                        quantity=quantity,
+                        text=text,
+                    )
+                ]
+            )
+        )
+
+        assert result.elements[0].quantity == quantity
+        assert result.elements[0].quantity_status is None
+        assert result.elements[0].panel_count == panel_count
+        assert decisions[0].reason == GROUNDING_MODEL_EVIDENCE_QUANTITY
+
+
+def test_ambiguous_group_text_does_not_infer_single_unit() -> None:
+    result, decisions = validate_enrichment_quantities(
+        GeminiEnrichmentResult(
+            elements=[
+                _commercial_row_element(
+                    temporary_id="grupo",
+                    reference=None,
+                    name="Ventanas habitaciones",
+                    context="HABITACIONES",
+                    width=0.80,
+                    height=1.20,
+                    panel_count=2,
+                    text="Ventanas habitaciones 0.80 x 1.20 2 cuerpos",
+                )
+            ]
+        )
+    )
+
+    assert result.elements[0].quantity is None
+    assert result.elements[0].quantity_status is None
+    assert decisions[0].reason == NO_MODEL_QUANTITY
+
+
+def test_component_count_alone_does_not_infer_single_unit() -> None:
+    result, decisions = validate_enrichment_quantities(
+        GeminiEnrichmentResult(
+            elements=[
+                GeminiElementEnrichment(
+                    temporary_id="only-components",
+                    panel_count=5,
+                    evidence=[GeminiEnrichmentEvidenceNote(type="table", text="5 cuerpos")],
+                )
+            ]
+        )
+    )
+
+    assert result.elements[0].quantity is None
+    assert result.elements[0].quantity_status is None
+    assert decisions[0].reason == NO_MODEL_QUANTITY
+
+
+def test_casa_pereira_complete_nineteen_positions_remain_distinct_with_quantity_one() -> None:
+    rows = [
+        ("PV-01", "SOTANO", 5.25, 2.50, 5),
+        ("V-01", "SOTANO", 0.90, 1.45, 2),
+        ("V-03", "SOTANO", 0.80, 0.40, 2),
+        ("V-01", "NIVEL 1", 1.20, 1.50, 2),
+        ("V-01", "NIVEL 2", 1.20, 1.50, 2),
+        ("V-02", "NIVEL 1", 1.00, 1.20, 2),
+        ("V-02", "NIVEL 2", 1.00, 1.20, 2),
+        ("V-04", "NIVEL 1", 1.40, 1.30, 3),
+        ("V-04", "NIVEL 2", 1.40, 1.30, 3),
+        ("P-01", "NIVEL 1", 0.90, 2.10, 1),
+        ("P-01", "NIVEL 2", 0.90, 2.10, 1),
+        ("F-01", "FACHADA", 1.50, 2.40, 1),
+        ("F-02", "FACHADA", 1.60, 2.40, 1),
+        ("F-03", "FACHADA", 1.70, 2.40, 1),
+        ("V-05", "PATIO", 0.70, 1.00, 2),
+        ("V-06", "PATIO", 0.75, 1.00, 2),
+        ("V-07", "PATIO", 0.80, 1.00, 2),
+        ("PV-02", "TERRAZA", 3.10, 2.30, 4),
+        ("PV-03", "TERRAZA", 2.80, 2.30, 3),
+    ]
+    elements = [
+        _commercial_row_element(
+            temporary_id=f"item-{index}",
+            reference=reference,
+            context=context,
+            width=width,
+            height=height,
+            panel_count=panel_count,
+            text=f"{reference} {context} {width} x {height} N Cuerpos {panel_count}",
+        )
+        for index, (reference, context, width, height, panel_count) in enumerate(rows, start=1)
+    ]
+
+    result, decisions = validate_enrichment_quantities(
+        GeminiEnrichmentResult(elements=elements)
+    )
+
+    assert len(result.elements) == 19
+    assert all(element.quantity == 1 for element in result.elements)
+    assert all(
+        element.quantity_status == ExtractionStatus.INFERRED for element in result.elements
+    )
+    assert [element.reference for element in result.elements].count("V-01") == 3
+    v01_contexts = [
+        element.occurrence_context
+        for element in result.elements
+        if element.reference == "V-01"
+    ]
+    assert v01_contexts == ["SOTANO", "NIVEL 1", "NIVEL 2"]
+    assert [element.panel_count for element in result.elements] == [row[4] for row in rows]
+    assert all(decision.reason == COMMERCIAL_ROW_SINGLE_UNIT_INFERRED for decision in decisions)
+
+
+def _commercial_row_element(
+    *,
+    temporary_id: str,
+    reference: str | None,
+    context: str,
+    width: float,
+    height: float,
+    panel_count: int,
+    text: str,
+    name: str | None = "Ventana",
+    quantity: int | None = None,
+    components: list[GeminiEnrichmentComponent] | None = None,
+) -> GeminiElementEnrichment:
+    return GeminiElementEnrichment(
+        temporary_id=temporary_id,
+        reference=reference,
+        name=name,
+        quantity=quantity,
+        occurrence_context=context,
+        panel_count=panel_count,
+        measurements=[
+            GeminiEnrichmentMeasurement(type="width", value=width, unit="m"),
+            GeminiEnrichmentMeasurement(type="height", value=height, unit="m"),
+        ],
+        components=components or [],
+        evidence=[
+            GeminiEnrichmentEvidenceNote(
+                source_id="source-1",
+                type="table",
+                text=text,
+                sheet_name="Casa Pereira",
+                cell_range="A2:G2",
+            )
+        ],
+    )
 
 
 def _source_candidate(

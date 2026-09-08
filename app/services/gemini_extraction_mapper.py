@@ -34,6 +34,11 @@ from app.models.specifications import (
 AREA_ABSOLUTE_TOLERANCE_M2 = 0.02
 AREA_RELATIVE_TOLERANCE = 0.02
 AREA_MISMATCH_WARNING_CODE = "MEASUREMENT_AREA_MISMATCH"
+TOTAL_AREA_MISMATCH_WARNING_CODE = "MEASUREMENT_TOTAL_AREA_MISMATCH"
+MEASUREMENT_CONFLICT_WARNING_CODE = "MEASUREMENT_CONFLICT"
+AREA_SCOPE_UNIT = "unit"
+AREA_SCOPE_TOTAL = "total"
+AREA_SCOPE_UNSPECIFIED = "unspecified"
 
 
 def map_gemini_extraction_to_requirement_extraction(
@@ -74,7 +79,9 @@ def map_gemini_extraction_to_requirement_extraction(
         )
         for index, item in enumerate(extraction.elements, start=1)
     ]
+    warnings.extend(_measurement_conflict_warnings(elements, evidence))
     warnings.extend(_measurement_area_mismatch_warnings(elements, evidence))
+    warnings.extend(_measurement_total_area_mismatch_warnings(elements, evidence))
 
     return RequirementExtraction(
         requirement=_map_requirement(extraction, evidence_ids),
@@ -532,7 +539,11 @@ def _measurement_evidence_ids(evidence_ids: list[str] | None) -> list[str]:
 
 def _measurement_type(item: GeminiMeasurement) -> str:
     raw_type = item.type or "unspecified"
-    if _is_area_measurement_label(item.label) or _is_area_measurement_label(item.type):
+    if (
+        _is_area_measurement_label(item.label)
+        or _is_area_measurement_label(item.type)
+        or _is_area_measurement_label(item.text)
+    ):
         return "area"
 
     return raw_type
@@ -543,7 +554,18 @@ def _is_area_measurement_label(value: str | None) -> bool:
         return False
 
     normalized = _compact_text(value)
-    return normalized in {"m2", "m²", "mÂ²", "ma2", "area"}
+    return normalized in {
+        "m2",
+        "m²",
+        "mÂ²",
+        "ma2",
+        "area",
+        "areaunitaria",
+        "areatotal",
+        "totalm2",
+        "m2total",
+        "totalarea",
+    }
 
 
 def _compact_text(value: str) -> str:
@@ -563,6 +585,58 @@ def _compact_text(value: str) -> str:
     )
 
 
+def _measurement_conflict_warnings(
+    elements: list[Element],
+    evidence: list[Evidence],
+) -> list[Warning]:
+    warnings: list[Warning] = []
+    evidence_by_id = {item.id: item for item in evidence}
+    for element in elements:
+        groups = {
+            "width": _positive_measurements(element.measurements, "width"),
+            "height": _positive_measurements(element.measurements, "height"),
+            "unit area": [
+                measurement
+                for measurement in _positive_measurements(element.measurements, "area")
+                if _area_measurement_scope(measurement) != AREA_SCOPE_TOTAL
+            ],
+            "total area": [
+                measurement
+                for measurement in _positive_measurements(element.measurements, "area")
+                if _area_measurement_scope(measurement) == AREA_SCOPE_TOTAL
+            ],
+        }
+        for label, measurements in groups.items():
+            conflict_pair = _first_conflicting_measurement_pair(measurements)
+            if conflict_pair is None:
+                continue
+            first, second = conflict_pair
+            evidence_ids, source_ids = _measurement_warning_sources(
+                [first, second],
+                evidence_by_id,
+            )
+            warnings.append(
+                Warning(
+                    id=(
+                        f"warning-{MEASUREMENT_CONFLICT_WARNING_CODE.casefold()}-"
+                        f"{len(warnings) + 1}"
+                    ),
+                    code=MEASUREMENT_CONFLICT_WARNING_CODE,
+                    severity="warning",
+                    message=(
+                        f"Multiple incompatible {label} measurements were reported: "
+                        f"{_measurement_value_with_unit(first)} and "
+                        f"{_measurement_value_with_unit(second)}."
+                    ),
+                    source_ids=source_ids,
+                    element_ids=[element.id],
+                    evidence_ids=evidence_ids,
+                )
+            )
+
+    return warnings
+
+
 def _measurement_area_mismatch_warnings(
     elements: list[Element],
     evidence: list[Evidence],
@@ -572,7 +646,7 @@ def _measurement_area_mismatch_warnings(
     for element in elements:
         width = _first_positive_measurement(element.measurements, "width")
         height = _first_positive_measurement(element.measurements, "height")
-        reported_area = _first_positive_measurement(element.measurements, "area")
+        reported_area = _first_unit_or_unspecified_area_measurement(element.measurements)
         if width is None or height is None or reported_area is None:
             continue
 
@@ -583,23 +657,12 @@ def _measurement_area_mismatch_warnings(
             continue
 
         derived_area_m2 = width_m * height_m
-        difference = abs(derived_area_m2 - reported_area_m2)
-        relative_difference = difference / derived_area_m2 if derived_area_m2 else 0
-        if (
-            difference <= AREA_ABSOLUTE_TOLERANCE_M2
-            or relative_difference <= AREA_RELATIVE_TOLERANCE
-        ):
+        if _within_area_tolerance(derived_area_m2, reported_area_m2):
             continue
 
-        evidence_ids = _unique_ids(
-            width.evidence_ids + height.evidence_ids + reported_area.evidence_ids
-        )
-        source_ids = _unique_ids(
-            [
-                evidence_by_id[evidence_id].source_id
-                for evidence_id in evidence_ids
-                if evidence_id in evidence_by_id
-            ]
+        evidence_ids, source_ids = _measurement_warning_sources(
+            [width, height, reported_area],
+            evidence_by_id,
         )
         warnings.append(
             Warning(
@@ -621,6 +684,71 @@ def _measurement_area_mismatch_warnings(
     return warnings
 
 
+def _measurement_total_area_mismatch_warnings(
+    elements: list[Element],
+    evidence: list[Evidence],
+) -> list[Warning]:
+    warnings: list[Warning] = []
+    evidence_by_id = {item.id: item for item in evidence}
+    for element in elements:
+        unit_area = _first_area_measurement_by_scope(
+            element.measurements,
+            AREA_SCOPE_UNIT,
+        )
+        total_area = _first_area_measurement_by_scope(
+            element.measurements,
+            AREA_SCOPE_TOTAL,
+        )
+        quantity = _positive_reliable_quantity(element)
+        if unit_area is None or total_area is None or quantity is None:
+            continue
+
+        unit_area_m2 = _area_measurement_to_square_meters(unit_area)
+        total_area_m2 = _area_measurement_to_square_meters(total_area)
+        if unit_area_m2 is None or total_area_m2 is None:
+            continue
+
+        derived_total_area_m2 = unit_area_m2 * quantity
+        if _within_area_tolerance(derived_total_area_m2, total_area_m2):
+            continue
+
+        evidence_ids, source_ids = _measurement_warning_sources(
+            [unit_area, total_area],
+            evidence_by_id,
+        )
+        if element.quantity is not None:
+            evidence_ids = _unique_ids(evidence_ids + element.quantity.evidence_ids)
+            source_ids = _unique_ids(
+                source_ids
+                + [
+                    evidence_by_id[evidence_id].source_id
+                    for evidence_id in element.quantity.evidence_ids
+                    if evidence_id in evidence_by_id
+                ]
+            )
+        warnings.append(
+            Warning(
+                id=(
+                    f"warning-{TOTAL_AREA_MISMATCH_WARNING_CODE.casefold()}-"
+                    f"{len(warnings) + 1}"
+                ),
+                code=TOTAL_AREA_MISMATCH_WARNING_CODE,
+                severity="warning",
+                message=(
+                    f"Reported total area {total_area_m2:.2f} m2 differs from "
+                    f"expected total area {derived_total_area_m2:.2f} m2 using "
+                    f"unit area {unit_area_m2:.2f} m2 multiplied by quantity "
+                    f"{quantity:g}."
+                ),
+                source_ids=source_ids,
+                element_ids=[element.id],
+                evidence_ids=evidence_ids,
+            )
+        )
+
+    return warnings
+
+
 def _first_positive_measurement(
     measurements: list[Measurement],
     measurement_type: str,
@@ -631,6 +759,135 @@ def _first_positive_measurement(
                 return measurement
 
     return None
+
+
+def _positive_measurements(
+    measurements: list[Measurement],
+    measurement_type: str,
+) -> list[Measurement]:
+    return [
+        measurement
+        for measurement in measurements
+        if measurement.type == measurement_type
+        and measurement.value is not None
+        and measurement.value > 0
+    ]
+
+
+def _first_unit_or_unspecified_area_measurement(
+    measurements: list[Measurement],
+) -> Measurement | None:
+    for measurement in _positive_measurements(measurements, "area"):
+        if _area_measurement_scope(measurement) != AREA_SCOPE_TOTAL:
+            return measurement
+    return None
+
+
+def _first_area_measurement_by_scope(
+    measurements: list[Measurement],
+    scope: str,
+) -> Measurement | None:
+    for measurement in _positive_measurements(measurements, "area"):
+        if _area_measurement_scope(measurement) == scope:
+            return measurement
+    return None
+
+
+def _area_measurement_scope(measurement: Measurement) -> str:
+    text = _compact_text(
+        " ".join(
+            value
+            for value in (measurement.raw_label, measurement.notes)
+            if value
+        )
+    )
+    if text in {"areaunitaria", "m2unitario", "unitarea", "unitm2"}:
+        return AREA_SCOPE_UNIT
+    if text in {"areatotal", "totalm2", "m2total", "totalarea"}:
+        return AREA_SCOPE_TOTAL
+    if "unitaria" in text or "unitario" in text or "unit" in text:
+        return AREA_SCOPE_UNIT
+    if "total" in text:
+        return AREA_SCOPE_TOTAL
+    return AREA_SCOPE_UNSPECIFIED
+
+
+def _positive_reliable_quantity(element: Element) -> float | None:
+    if element.quantity is None:
+        return None
+    if element.quantity.status in {
+        ExtractionStatus.AMBIGUOUS,
+        ExtractionStatus.UNKNOWN,
+        ExtractionStatus.NOT_APPLICABLE,
+    }:
+        return None
+    value = element.quantity.value
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) if value > 0 else None
+    if isinstance(value, str):
+        try:
+            parsed = float(value.replace(",", "."))
+        except ValueError:
+            return None
+        return parsed if parsed > 0 else None
+    return None
+
+
+def _first_conflicting_measurement_pair(
+    measurements: list[Measurement],
+) -> tuple[Measurement, Measurement] | None:
+    normalized = [
+        (measurement, _measurement_to_base_unit(measurement))
+        for measurement in measurements
+    ]
+    normalized = [item for item in normalized if item[1] is not None]
+    for index, (first, first_value) in enumerate(normalized):
+        for second, second_value in normalized[index + 1:]:
+            if first_value is None or second_value is None:
+                continue
+            if not _within_area_tolerance(first_value, second_value):
+                return first, second
+    return None
+
+
+def _measurement_to_base_unit(measurement: Measurement) -> float | None:
+    if measurement.type in {"width", "height"}:
+        return _linear_measurement_to_meters(measurement)
+    if measurement.type == "area":
+        return _area_measurement_to_square_meters(measurement)
+    return None
+
+
+def _within_area_tolerance(expected: float, reported: float) -> bool:
+    difference = abs(expected - reported)
+    relative_difference = difference / expected if expected else 0
+    return (
+        difference <= AREA_ABSOLUTE_TOLERANCE_M2
+        or relative_difference <= AREA_RELATIVE_TOLERANCE
+    )
+
+
+def _measurement_warning_sources(
+    measurements: list[Measurement],
+    evidence_by_id: dict[str, Evidence],
+) -> tuple[list[str], list[str]]:
+    evidence_ids = _unique_ids(
+        [
+            evidence_id
+            for measurement in measurements
+            for evidence_id in measurement.evidence_ids
+        ]
+    )
+    source_ids = _unique_ids(
+        [
+            evidence_by_id[evidence_id].source_id
+            for evidence_id in evidence_ids
+            if evidence_id in evidence_by_id
+        ]
+    )
+    return evidence_ids, source_ids
 
 
 def _linear_measurement_to_meters(measurement: Measurement) -> float | None:

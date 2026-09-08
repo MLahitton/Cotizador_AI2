@@ -43,6 +43,7 @@ _SUSPICIOUS_ROLES = {
     "REPETITION_COUNT",
     "COMPONENT_COUNT",
     "PANEL_COUNT",
+    "SECTION_COUNT",
     "ITEM_NUMBER",
 }
 
@@ -932,7 +933,7 @@ def _trigger_for_role(role: str) -> str:
         return TRIGGER_QUANTITY_EQUALS_LEVEL
     if role in {"LEVEL_RANGE", "REPETITION_COUNT"}:
         return TRIGGER_QUANTITY_EQUALS_REPETITION_COUNT
-    if role == "COMPONENT_COUNT":
+    if role in {"COMPONENT_COUNT", "SECTION_COUNT"}:
         return TRIGGER_QUANTITY_EQUALS_COMPONENT_COUNT
     if role == "PANEL_COUNT":
         return TRIGGER_QUANTITY_EQUALS_PANEL_COUNT

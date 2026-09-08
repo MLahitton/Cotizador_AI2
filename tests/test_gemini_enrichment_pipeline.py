@@ -11,6 +11,7 @@ from app.models.gemini_enrichment import (
     GeminiEnrichmentEvidenceNote,
     GeminiEnrichmentGlass,
     GeminiEnrichmentMeasurement,
+    GeminiEnrichmentNamedItem,
     GeminiEnrichmentResult,
 )
 from app.models.requirement import ExtractionMetadata, Requirement, TokenUsage
@@ -33,10 +34,36 @@ from app.services.gemini_extraction_mapper import (
 from app.services.inventory_reconciliation import (
     CONTEXT_LABEL,
     CONTEXT_LABEL_NOT_IDENTITY_REASON,
+    DIFFERENT_CONTEXT_REASON,
     DUPLICATE_REFERENCE_REASON,
+    GLASS_EXPLICIT_CONFLICT,
+    GLASS_SCOPE_DOCUMENT_GENERAL,
+    GLASS_SCOPE_ITEM_LOCAL,
+    GLASS_SCOPE_SECTION_LEVEL,
+    GLASS_SCOPE_UNKNOWN,
     ORPHAN_REFERENCE_REASON,
+    PROFILE_EXPLICIT_CONFLICT,
     SOURCE_CONFLICT_REASON,
+    InventoryDecision,
     reconcile_inventory_candidates,
+)
+from app.services.inventory_trace import (
+    InventoryDebugTrace,
+    InventoryElementTrace,
+    enrichment_inventory_elements,
+    final_inventory_elements,
+)
+from app.services.item_count_diagnostics import (
+    DROPPED_AS_ORPHAN,
+    DROPPED_BY_MAPPER,
+    DROPPED_BY_SCOPE,
+    DUPLICATE_DISCOVERY,
+    DUPLICATE_ENRICHMENT,
+    MERGED_IN_RECONCILIATION,
+    MISSING_AT_DISCOVERY,
+    ORPHAN_WITH_TECHNICAL_SUPPORT,
+    RECONCILIATION_UNDERMERGE,
+    build_item_count_diagnostic_report,
 )
 from app.services.numeric_trace import build_numeric_resolution_trace
 from app.services.region_sanitizer import REGION_NORMALIZED
@@ -1001,6 +1028,173 @@ def test_inventory_reconciliation_merges_canonical_duplicate_references() -> Non
     assert DUPLICATE_REFERENCE_REASON in (extraction.notes or "")
 
 
+def test_inventory_reconciliation_keeps_same_reference_with_distinct_commercial_context() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="sotano-v-01",
+                reference="V-01",
+                quantity=2,
+                occurrence_context="SOTANO",
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=0.9, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=1.45, unit="m"),
+                    GeminiEnrichmentMeasurement(type="area", value=1.305, unit="m2"),
+                ],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="nivel-1-v-01",
+                reference="V-01",
+                quantity=5,
+                occurrence_context="Nivel 1",
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=5.8, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=2.1, unit="m"),
+                    GeminiEnrichmentMeasurement(type="area", value=12.18, unit="m2"),
+                ],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="nivel-2-v-01",
+                reference="V-01",
+                quantity=3,
+                occurrence_context="nivel_2",
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=0.9, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=2.5, unit="m"),
+                    GeminiEnrichmentMeasurement(type="area", value=2.25, unit="m2"),
+                ],
+            ),
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+
+    assert [item.temporary_id for item in result.elements] == [
+        "sotano-v-01",
+        "nivel-1-v-01",
+        "nivel-2-v-01",
+    ]
+    assert [item.quantity for item in result.elements] == [2, 5, 3]
+    assert all(decision.action == "KEEP" for decision in decisions)
+    assert {decision.reason for decision in decisions} == {DIFFERENT_CONTEXT_REASON}
+    assert {decision.commercial_context for decision in decisions} == {
+        "sotano",
+        "nivel_1",
+        "nivel_2",
+    }
+
+
+def test_inventory_reconciliation_keeps_repeated_pv_reference_by_commercial_context() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="sotano-pv-01",
+                reference="PV-01",
+                quantity=5,
+                occurrence_context="SOTANO",
+                measurements=[GeminiEnrichmentMeasurement(type="width", value=2.3, unit="m")],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="nivel-1-pv-01",
+                reference="PV-01",
+                quantity=5,
+                occurrence_context="Nivel 1",
+                measurements=[GeminiEnrichmentMeasurement(type="width", value=2.3, unit="m")],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="nivel-2-pv-01",
+                reference="PV-01",
+                quantity=5,
+                occurrence_context="Nivel 2",
+                measurements=[GeminiEnrichmentMeasurement(type="width", value=2.3, unit="m")],
+            ),
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+
+    assert [item.temporary_id for item in result.elements] == [
+        "sotano-pv-01",
+        "nivel-1-pv-01",
+        "nivel-2-pv-01",
+    ]
+    assert [decision.reason for decision in decisions] == [
+        DIFFERENT_CONTEXT_REASON,
+        DIFFERENT_CONTEXT_REASON,
+        DIFFERENT_CONTEXT_REASON,
+    ]
+
+
+def test_inventory_reconciliation_merges_same_reference_same_commercial_context() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="table",
+                reference="V-01",
+                quantity=2,
+                occurrence_context="Nivel 1",
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=1.2, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=2.1, unit="m"),
+                ],
+                evidence=[
+                    GeminiEnrichmentEvidenceNote(
+                        source_id="source-1",
+                        type="table",
+                        text="Nivel 1 V-01 1.20 x 2.10 cantidad 2",
+                    )
+                ],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="detail",
+                reference="V-1",
+                occurrence_context="nivel_1",
+                geometry_type_raw="rectangular",
+                evidence=[
+                    GeminiEnrichmentEvidenceNote(
+                        source_id="source-1",
+                        type="visual",
+                        text="Detalle V-01 Nivel 1",
+                    )
+                ],
+            ),
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+
+    assert len(result.elements) == 1
+    assert result.elements[0].temporary_id == "table"
+    assert result.elements[0].reference == "V-01"
+    assert result.elements[0].geometry_type_raw == "rectangular"
+    assert decisions[0].action == "MERGE"
+    assert decisions[0].commercial_context == "nivel_1"
+
+
+def test_inventory_reconciliation_preserves_legacy_merge_when_context_is_missing() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="table",
+                reference="V-01",
+                quantity=2,
+                measurements=[GeminiEnrichmentMeasurement(type="width", value=1.2, unit="m")],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="detail",
+                reference="V-1",
+                geometry_type_raw="rectangular",
+            ),
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+
+    assert len(result.elements) == 1
+    assert decisions[0].action == "MERGE"
+    assert decisions[0].reason == DUPLICATE_REFERENCE_REASON
+    assert decisions[0].commercial_context is None
+
 def test_inventory_reconciliation_marks_same_reference_source_conflict_for_review() -> None:
     extraction = enrichment_to_gemini_extraction(
         GeminiDiscoveryResult(),
@@ -1394,6 +1588,71 @@ def test_numeric_trace_distinguishes_quantity_level_dimensions_and_component_cou
     )
 
 
+
+def test_numeric_trace_recognizes_component_count_label_value_variants() -> None:
+    examples = [
+        "PV-01 N° Cuerpos 5",
+        "PV-01 N° Cuerpos: 5",
+        "PV-01 Nº Cuerpos 5",
+        "PV-01 Numero de cuerpos = 5",
+        "PV-01 Número de cuerpos = 5",
+        "PV-01 Cuerpos 5",
+        "PV-01 5 cuerpos",
+        "PV-01 Paneles 5",
+        "PV-01 Hojas 5",
+    ]
+
+    for text in examples:
+        trace = build_numeric_resolution_trace(
+            GeminiEnrichmentResult(
+                elements=[
+                    GeminiElementEnrichment(
+                        temporary_id="pv-01",
+                        reference="PV-01",
+                        quantity=5,
+                        evidence=[GeminiEnrichmentEvidenceNote(type="table", text=text)],
+                    )
+                ]
+            ),
+            stage="test",
+        )
+
+        roles = {
+            (candidate.semantic_role, candidate.value)
+            for candidate in trace.elements[0].candidates
+        }
+        assert ("COMPONENT_COUNT", 5) in roles, text
+
+
+def test_numeric_trace_recognizes_section_count_label_value_variants() -> None:
+    examples = [
+        "PV-01 3 modulos",
+        "PV-01 Módulos: 3",
+        "PV-01 Modulos 3",
+    ]
+
+    for text in examples:
+        trace = build_numeric_resolution_trace(
+            GeminiEnrichmentResult(
+                elements=[
+                    GeminiElementEnrichment(
+                        temporary_id="pv-01",
+                        reference="PV-01",
+                        quantity=3,
+                        evidence=[GeminiEnrichmentEvidenceNote(type="table", text=text)],
+                    )
+                ]
+            ),
+            stage="test",
+        )
+
+        roles = {
+            (candidate.semantic_role, candidate.value)
+            for candidate in trace.elements[0].candidates
+        }
+        assert ("SECTION_COUNT", 3) in roles, text
+
+
 def test_numeric_trace_distinguishes_level_range_and_repetition_count() -> None:
     trace = build_numeric_resolution_trace(
         GeminiEnrichmentResult(
@@ -1685,3 +1944,1316 @@ def test_full_pipeline_debug_capture_records_inventory_stage_counts(
     assert {
         decision.reason for decision in debug_capture.reconciliation_decisions
     } == {CONTEXT_LABEL_NOT_IDENTITY_REASON}
+
+
+
+
+def test_item_count_diagnostics_reports_expected_item_present_until_final() -> None:
+    trace = _inventory_trace(
+        DISCOVERY=[_trace_item("V-1", temporary_id="d-1")],
+        ENRICHMENT_BATCH_1=[_trace_item("V-01", temporary_id="d-1")],
+        MERGED_ENRICHMENT=[_trace_item("V-01", temporary_id="d-1")],
+        PRE_RECONCILIATION=[_trace_item("V-01", temporary_id="d-1")],
+        POST_RECONCILIATION=[_trace_item("V-01", temporary_id="d-1")],
+        FINAL_REQUIREMENT_EXTRACTION=[_trace_item("V-01", id="element-1")],
+    )
+
+    report = build_item_count_diagnostic_report(
+        case_name="GOOD_CASE",
+        expected_items=["V-01"],
+        trace=trace,
+        scoped_count=1,
+    )
+
+    assert report.stage_counts.discovered == 1
+    assert report.stage_counts.scoped == 1
+    assert report.stage_counts.enriched == 1
+    assert report.stage_counts.final == 1
+    assert report.metrics.precision == 1.0
+    assert report.metrics.recall == 1.0
+    assert report.metrics.item_count_error_percent == 0.0
+    assert report.missing == ()
+    assert report.unexpected == ()
+
+
+def test_item_count_diagnostics_identifies_missing_at_discovery() -> None:
+    trace = _inventory_trace(
+        DISCOVERY=[_trace_item("V-01")],
+        FINAL_REQUIREMENT_EXTRACTION=[_trace_item("V-01")],
+    )
+
+    report = build_item_count_diagnostic_report(
+        case_name="BAD_CASE",
+        expected_items=["V-01", "V-02"],
+        trace=trace,
+    )
+
+    assert report.missing[0].identity == "V-02"
+    assert report.missing[0].reason == MISSING_AT_DISCOVERY
+    assert report.metrics.recall == 0.5
+    assert report.metrics.missing_item_rate == 0.5
+
+
+def test_item_count_diagnostics_identifies_scope_drop() -> None:
+    trace = _inventory_trace(
+        DISCOVERY=[_trace_item("V-01")],
+        ENRICHMENT_BATCH_1=[],
+        MERGED_ENRICHMENT=[],
+        PRE_RECONCILIATION=[],
+        POST_RECONCILIATION=[],
+        FINAL_REQUIREMENT_EXTRACTION=[],
+    )
+
+    report = build_item_count_diagnostic_report(
+        case_name="SCOPE_CASE",
+        expected_items=["V-01"],
+        trace=trace,
+        scoped_count=0,
+    )
+
+    assert report.missing[0].reason == DROPPED_BY_SCOPE
+    assert report.missing[0].last_seen_stage == "DISCOVERY"
+    assert report.stage_counts.scoped == 0
+
+
+def test_item_count_diagnostics_classifies_reconciliation_merge_and_orphan_drop() -> None:
+    trace = _inventory_trace(
+        DISCOVERY=[
+            _trace_item(None, temporary_id="a"),
+            _trace_item(None, temporary_id="b"),
+        ],
+        ENRICHMENT_BATCH_1=[
+            _trace_item(None, temporary_id="a"),
+            _trace_item(None, temporary_id="b"),
+        ],
+        MERGED_ENRICHMENT=[
+            _trace_item(None, temporary_id="a"),
+            _trace_item(None, temporary_id="b"),
+        ],
+        PRE_RECONCILIATION=[
+            _trace_item(None, temporary_id="a"),
+            _trace_item(None, temporary_id="b"),
+        ],
+        POST_RECONCILIATION=[_trace_item(None, temporary_id="a")],
+        FINAL_REQUIREMENT_EXTRACTION=[_trace_item(None, id="a")],
+    )
+    merge_decision = InventoryDecision(
+        action="MERGE",
+        reason=DUPLICATE_REFERENCE_REASON,
+        temporary_ids=("a", "b"),
+        reference=None,
+        losing_temporary_ids=("b",),
+    )
+
+    report = build_item_count_diagnostic_report(
+        case_name="MERGE_CASE",
+        expected_items=["a", "b"],
+        trace=trace,
+        reconciliation_decisions=[merge_decision],
+    )
+
+    assert report.missing[0].identity == "B"
+    assert report.missing[0].reason == MERGED_IN_RECONCILIATION
+
+    orphan_trace = _inventory_trace(
+        DISCOVERY=[_trace_item("TAG-01", temporary_id="tag")],
+        ENRICHMENT_BATCH_1=[_trace_item("TAG-01", temporary_id="tag")],
+        MERGED_ENRICHMENT=[_trace_item("TAG-01", temporary_id="tag")],
+        PRE_RECONCILIATION=[_trace_item("TAG-01", temporary_id="tag")],
+        POST_RECONCILIATION=[],
+        FINAL_REQUIREMENT_EXTRACTION=[],
+    )
+    orphan_decision = InventoryDecision(
+        action="DROP_AS_NON_COMMERCIAL",
+        reason=ORPHAN_REFERENCE_REASON,
+        temporary_ids=("tag",),
+        reference="TAG-01",
+    )
+
+    orphan_report = build_item_count_diagnostic_report(
+        case_name="ORPHAN_CASE",
+        expected_items=["TAG-01"],
+        trace=orphan_trace,
+        reconciliation_decisions=[orphan_decision],
+    )
+
+    assert orphan_report.missing[0].reason == DROPPED_AS_ORPHAN
+
+
+def test_item_count_diagnostics_identifies_mapper_drop() -> None:
+    trace = _inventory_trace(
+        DISCOVERY=[_trace_item("V-01")],
+        ENRICHMENT_BATCH_1=[_trace_item("V-01")],
+        MERGED_ENRICHMENT=[_trace_item("V-01")],
+        PRE_RECONCILIATION=[_trace_item("V-01")],
+        POST_RECONCILIATION=[_trace_item("V-01")],
+        FINAL_REQUIREMENT_EXTRACTION=[],
+    )
+
+    report = build_item_count_diagnostic_report(
+        case_name="MAPPER_DROP_CASE",
+        expected_items=["V-01"],
+        trace=trace,
+    )
+
+    assert report.missing[0].reason == DROPPED_BY_MAPPER
+    assert report.missing[0].last_seen_stage == "POST_RECONCILIATION"
+
+
+def test_item_count_diagnostics_reports_duplicate_discovery_enrichment_and_final() -> None:
+    trace = _inventory_trace(
+        DISCOVERY=[_trace_item("V-01", temporary_id="a"), _trace_item("V-1", temporary_id="b")],
+        ENRICHMENT_BATCH_1=[_trace_item("V-01", temporary_id="a")],
+        ENRICHMENT_BATCH_2=[_trace_item("V-01", temporary_id="b")],
+        FINAL_REQUIREMENT_EXTRACTION=[_trace_item("V-01", id="a"), _trace_item("V-01", id="b")],
+    )
+
+    report = build_item_count_diagnostic_report(
+        case_name="DUPLICATE_CASE",
+        expected_items=["V-01"],
+        trace=trace,
+    )
+
+    assert ("V-01", DUPLICATE_DISCOVERY, "DISCOVERY") in _extra_rows(report.duplicates)
+    assert ("V-01", DUPLICATE_ENRICHMENT, "ENRICHMENT") in _extra_rows(report.duplicates)
+    assert ("V-01", RECONCILIATION_UNDERMERGE, "FINAL_REQUIREMENT_EXTRACTION") in _extra_rows(
+        report.duplicates
+    )
+    assert report.metrics.duplicate_count == 1
+    assert report.metrics.duplicate_rate == 0.5
+
+
+def test_item_count_diagnostics_marks_unexpected_final_orphan_with_support() -> None:
+    trace = _inventory_trace(
+        DISCOVERY=[_trace_item("V-01"), _trace_item("TEMPORAL")],
+        ENRICHMENT_BATCH_1=[_trace_item("V-01"), _trace_item("TEMPORAL")],
+        MERGED_ENRICHMENT=[_trace_item("V-01"), _trace_item("TEMPORAL")],
+        PRE_RECONCILIATION=[_trace_item("V-01"), _trace_item("TEMPORAL")],
+        POST_RECONCILIATION=[_trace_item("V-01"), _trace_item("TEMPORAL")],
+        FINAL_REQUIREMENT_EXTRACTION=[_trace_item("V-01"), _trace_item("TEMPORAL")],
+    )
+
+    report = build_item_count_diagnostic_report(
+        case_name="EXTRA_CASE",
+        expected_items=["V-01"],
+        trace=trace,
+    )
+
+    assert report.unexpected[0].identity == "TEMPORAL"
+    assert report.unexpected[0].reason == ORPHAN_WITH_TECHNICAL_SUPPORT
+    assert report.metrics.precision == 0.5
+
+
+def test_reconciliation_preserves_reference_null_and_non_formal_items_with_support() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="no-ref-a",
+                reference=None,
+                quantity=1,
+                measurements=[GeminiEnrichmentMeasurement(type="width", value=1.2, unit="m")],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="context-label",
+                reference="SALA",
+                quantity=1,
+                measurements=[GeminiEnrichmentMeasurement(type="height", value=2.5, unit="m")],
+            ),
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+
+    assert [item.temporary_id for item in result.elements] == ["no-ref-a", "context-label"]
+    assert [decision.action for decision in decisions] == ["KEEP", "KEEP"]
+    assert decisions[1].reason == CONTEXT_LABEL_NOT_IDENTITY_REASON
+
+
+def test_reconciliation_drops_clear_orphan_but_keeps_commercial_supported_reference() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(temporary_id="orphan", reference="V-99"),
+            GeminiElementEnrichment(
+                temporary_id="supported",
+                reference="V-100",
+                quantity=1,
+                measurements=[GeminiEnrichmentMeasurement(type="width", value=1.4, unit="m")],
+            ),
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+
+    assert [item.reference for item in result.elements] == ["V-100"]
+    assert decisions[0].action == "DROP_AS_NON_COMMERCIAL"
+    assert decisions[0].reason == ORPHAN_REFERENCE_REASON
+    assert decisions[1].action == "KEEP"
+
+
+def test_scope_pipeline_keeps_full_partial_uncertain_and_drops_out_of_scope() -> None:
+    discovery = GeminiDiscoveryResult(
+        elements=[
+            GeminiElementDiscovery(temporary_id="full", reference="V-01"),
+            GeminiElementDiscovery(temporary_id="partial", reference="V-02"),
+            GeminiElementDiscovery(temporary_id="uncertain", reference="V-03"),
+            GeminiElementDiscovery(temporary_id="out", reference="M-01"),
+        ]
+    )
+    scope = provider_module.merge_scope_with_discovery(
+        discovery,
+        provider_module.GeminiScopeResult.model_validate(
+            {
+                "elements": [
+                    {"temporary_id": "full", "scope": "in_scope_full"},
+                    {"temporary_id": "partial", "scope": "in_scope_partial"},
+                    {"temporary_id": "uncertain", "scope": "uncertain"},
+                    {"temporary_id": "out", "scope": "out_of_scope"},
+                ]
+            }
+        ),
+    )
+
+    selected = provider_module.select_discoveries_for_enrichment(discovery, scope)
+
+    assert [item.temporary_id for item in selected.elements] == ["full", "partial", "uncertain"]
+
+
+def test_reconciliation_distinct_contexts_keep_payloads_separate() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="north",
+                reference="V-20",
+                occurrence_context="fachada norte",
+                quantity=1,
+                measurements=[GeminiEnrichmentMeasurement(type="width", value=1.1, unit="m")],
+                glass=[GeminiEnrichmentGlass(type="templado")],
+                profiles=[GeminiEnrichmentNamedItem(code="K40")],
+                components=[GeminiEnrichmentComponent(role="FIXED")],
+                evidence=[GeminiEnrichmentEvidenceNote(source_id="source-1", text="V-20 norte")],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="south",
+                reference="V-20",
+                occurrence_context="fachada sur",
+                quantity=1,
+                measurements=[GeminiEnrichmentMeasurement(type="height", value=2.2, unit="m")],
+                glass=[GeminiEnrichmentGlass(type="laminado")],
+                profiles=[GeminiEnrichmentNamedItem(code="S50")],
+                components=[GeminiEnrichmentComponent(role="SLIDING")],
+                evidence=[GeminiEnrichmentEvidenceNote(source_id="source-2", text="V-20 sur")],
+            ),
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+
+    assert [item.temporary_id for item in result.elements] == ["north", "south"]
+    assert {decision.reason for decision in decisions} == {DIFFERENT_CONTEXT_REASON}
+    assert [item.measurements[0].type for item in result.elements] == ["width", "height"]
+    assert [item.glass[0].type for item in result.elements] == ["templado", "laminado"]
+    assert [item.profiles[0].code for item in result.elements] == ["K40", "S50"]
+    assert [item.components[0].role for item in result.elements] == ["FIXED", "SLIDING"]
+    assert [item.evidence[0].source_id for item in result.elements] == ["source-1", "source-2"]
+
+
+
+def test_profile_resolution_preserves_explicit_and_inferred_profiles() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _profile_element(
+                "item-1",
+                [
+                    GeminiEnrichmentNamedItem(
+                        code="K70",
+                        role="system",
+                        status=ExtractionStatus.INFERRED,
+                        confidence=0.92,
+                    ),
+                    GeminiEnrichmentNamedItem(
+                        code="S50",
+                        role="system",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.7,
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+
+    item = result.elements[0]
+    assert [profile.code for profile in item.profiles] == ["S50", "K70"]
+    assert [profile.status for profile in item.profiles] == [
+        ExtractionStatus.EXPLICIT,
+        ExtractionStatus.INFERRED,
+    ]
+    assert PROFILE_EXPLICIT_CONFLICT not in item.missing_or_unknown
+
+
+def test_profile_resolution_preserves_inferred_alternatives_without_conflict() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _profile_element(
+                "item-1",
+                [
+                    GeminiEnrichmentNamedItem(
+                        code="K70",
+                        role="system",
+                        status=ExtractionStatus.INFERRED,
+                        confidence=0.64,
+                    ),
+                    GeminiEnrichmentNamedItem(
+                        code="K90",
+                        role="system",
+                        status=ExtractionStatus.INFERRED,
+                        confidence=0.81,
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+
+    item = result.elements[0]
+    assert [profile.code for profile in item.profiles] == ["K90", "K70"]
+    assert PROFILE_EXPLICIT_CONFLICT not in item.missing_or_unknown
+
+
+def test_profile_resolution_marks_explicit_primary_conflict_without_collapsing() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _profile_element(
+                "item-1",
+                [
+                    GeminiEnrichmentNamedItem(
+                        code="K70",
+                        role="system",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.74,
+                    ),
+                    GeminiEnrichmentNamedItem(
+                        code="S50",
+                        role="system",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.88,
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+
+    item = result.elements[0]
+    assert item.status == ExtractionStatus.AMBIGUOUS
+    assert PROFILE_EXPLICIT_CONFLICT in item.missing_or_unknown
+    assert [profile.code for profile in item.profiles] == ["S50", "K70"]
+
+
+def test_profile_resolution_allows_complementary_explicit_profiles() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _profile_element(
+                "item-1",
+                [
+                    GeminiEnrichmentNamedItem(
+                        code="K70",
+                        role="system",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.91,
+                    ),
+                    GeminiEnrichmentNamedItem(
+                        code="MARCO-01",
+                        role="frame",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.86,
+                    ),
+                    GeminiEnrichmentNamedItem(
+                        code="HOJA-02",
+                        role="sash",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.84,
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+
+    item = result.elements[0]
+    assert PROFILE_EXPLICIT_CONFLICT not in item.missing_or_unknown
+    assert [profile.code for profile in item.profiles] == ["K70", "MARCO-01", "HOJA-02"]
+
+
+def test_profile_resolution_keeps_inferred_when_no_explicit_system_exists() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _profile_element(
+                "item-1",
+                [
+                    GeminiEnrichmentNamedItem(
+                        code="S80",
+                        role="system",
+                        status=ExtractionStatus.INFERRED,
+                        confidence=0.79,
+                    )
+                ],
+                functional_type_raw="SLIDING_DOOR",
+                operation_raw="SLIDING",
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+
+    item = result.elements[0]
+    assert [profile.code for profile in item.profiles] == ["S80"]
+    assert item.profiles[0].status == ExtractionStatus.INFERRED
+
+
+def test_profile_resolution_general_note_does_not_displace_explicit_override() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _profile_element(
+                "item-1",
+                [
+                    GeminiEnrichmentNamedItem(
+                        code="K70",
+                        role="system",
+                        status=ExtractionStatus.INFERRED,
+                        confidence=0.93,
+                        notes="general note candidate",
+                    ),
+                    GeminiEnrichmentNamedItem(
+                        code="S50",
+                        role="system",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.65,
+                        notes="item row explicit override",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+
+    assert [profile.code for profile in result.elements[0].profiles] == ["S50", "K70"]
+
+
+def test_profile_resolution_keeps_neighbor_profile_contexts_separate() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _profile_element(
+                "north",
+                [
+                    GeminiEnrichmentNamedItem(
+                        code="K40",
+                        role="system",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.9,
+                    )
+                ],
+                reference="V-20",
+                occurrence_context="fachada norte",
+            ),
+            _profile_element(
+                "south",
+                [
+                    GeminiEnrichmentNamedItem(
+                        code="S50",
+                        role="system",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.9,
+                    )
+                ],
+                reference="V-20",
+                occurrence_context="fachada sur",
+            ),
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+
+    assert [item.temporary_id for item in result.elements] == ["north", "south"]
+    assert [item.profiles[0].code for item in result.elements] == ["K40", "S50"]
+    assert all(PROFILE_EXPLICIT_CONFLICT not in item.missing_or_unknown for item in result.elements)
+
+
+def test_profile_resolution_preferred_profile_uses_status_confidence_before_input_order() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _profile_element(
+                "item-1",
+                [
+                    GeminiEnrichmentNamedItem(
+                        code="K90",
+                        role="system",
+                        status=ExtractionStatus.INFERRED,
+                        confidence=0.99,
+                    ),
+                    GeminiEnrichmentNamedItem(
+                        code="K70",
+                        role="system",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.62,
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+    extraction = enrichment_to_gemini_extraction(GeminiDiscoveryResult(), result)
+    mapped = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert result.elements[0].profiles[0].code == "K70"
+    assert mapped.elements[0].profiles[0].code.value == "K70"
+
+
+def test_inventory_trace_records_profile_resolution_by_stage() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _profile_element(
+                "item-1",
+                [
+                    GeminiEnrichmentNamedItem(
+                        code="K70",
+                        name="Sistema K70",
+                        role="system",
+                        status=ExtractionStatus.INFERRED,
+                        confidence=0.82,
+                    )
+                ],
+            )
+        ]
+    )
+    result, _ = reconcile_inventory_candidates(enrichment)
+    extraction = enrichment_to_gemini_extraction(GeminiDiscoveryResult(), result)
+    mapped = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    enrichment_profile = enrichment_inventory_elements(result)[0].profiles[0]
+    final_profile = final_inventory_elements(mapped)[0].profiles[0]
+
+    assert enrichment_profile.code == "K70"
+    assert enrichment_profile.role == "system"
+    assert enrichment_profile.status == "inferred"
+    assert enrichment_profile.confidence == 0.82
+    assert enrichment_profile.resolution == "INFERRED"
+    assert final_profile.code == "K70"
+    assert final_profile.status == "inferred"
+    assert final_profile.resolution == "INFERRED"
+
+
+def test_glass_resolution_orders_explicit_glass_first() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _glass_element(
+                "item-1",
+                [
+                    GeminiEnrichmentGlass(
+                        type="templado",
+                        thickness="8 mm",
+                        status=ExtractionStatus.INFERRED,
+                        confidence=0.99,
+                    ),
+                    GeminiEnrichmentGlass(
+                        type="laminado",
+                        composition="5+5",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.61,
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+
+    assert [glass.type for glass in result.elements[0].glass] == ["laminado", "templado"]
+    assert GLASS_EXPLICIT_CONFLICT not in result.elements[0].missing_or_unknown
+
+
+def test_glass_resolution_preserves_inferred_alternatives_by_confidence() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _glass_element(
+                "item-1",
+                [
+                    GeminiEnrichmentGlass(
+                        type="templado",
+                        thickness="8 mm",
+                        status=ExtractionStatus.INFERRED,
+                        confidence=0.7,
+                    ),
+                    GeminiEnrichmentGlass(
+                        type="laminado",
+                        composition="4+4",
+                        status=ExtractionStatus.INFERRED,
+                        confidence=0.82,
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+
+    item = result.elements[0]
+    assert [glass.type for glass in item.glass] == ["laminado", "templado"]
+    assert GLASS_EXPLICIT_CONFLICT not in item.missing_or_unknown
+
+
+def test_glass_resolution_marks_explicit_conflict_without_collapsing() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _glass_element(
+                "item-1",
+                [
+                    GeminiEnrichmentGlass(
+                        type="templado",
+                        thickness="8 mm",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.94,
+                    ),
+                    GeminiEnrichmentGlass(
+                        type="laminado",
+                        composition="5+5",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.93,
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+
+    item = result.elements[0]
+    assert item.status == ExtractionStatus.AMBIGUOUS
+    assert GLASS_EXPLICIT_CONFLICT in item.missing_or_unknown
+    assert [glass.type for glass in item.glass] == ["templado", "laminado"]
+    assert [glass.status for glass in item.glass] == [
+        ExtractionStatus.AMBIGUOUS,
+        ExtractionStatus.AMBIGUOUS,
+    ]
+
+
+def test_glass_resolution_treatment_does_not_displace_explicit_type() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _glass_element(
+                "item-1",
+                [
+                    GeminiEnrichmentGlass(
+                        treatment="pelicula reduccion calor",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.98,
+                    ),
+                    GeminiEnrichmentGlass(
+                        type="laminado",
+                        composition="5+5",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.74,
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+
+    item = result.elements[0]
+    assert item.glass[0].type == "laminado"
+    assert item.glass[1].treatment == "pelicula reduccion calor"
+    assert GLASS_EXPLICIT_CONFLICT not in item.missing_or_unknown
+
+
+def test_glass_resolution_color_does_not_displace_type_or_composition() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _glass_element(
+                "item-1",
+                [
+                    GeminiEnrichmentGlass(
+                        color="bronce",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.96,
+                    ),
+                    GeminiEnrichmentGlass(
+                        type="templado",
+                        thickness="10 mm",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.76,
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+
+    item = result.elements[0]
+    assert item.glass[0].type == "templado"
+    assert item.glass[1].color == "bronce"
+    assert GLASS_EXPLICIT_CONFLICT not in item.missing_or_unknown
+
+
+def test_glass_resolution_keeps_compatible_complementary_entries_without_conflict() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _glass_element(
+                "item-1",
+                [
+                    GeminiEnrichmentGlass(
+                        type="laminado",
+                        composition="5+5",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.88,
+                    ),
+                    GeminiEnrichmentGlass(
+                        treatment="low-e",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.87,
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+
+    item = result.elements[0]
+    assert [glass.composition or glass.treatment for glass in item.glass] == ["5+5", "low-e"]
+    assert GLASS_EXPLICIT_CONFLICT not in item.missing_or_unknown
+
+
+def test_glass_resolution_same_reference_different_context_does_not_mix_glass() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _glass_element(
+                "north",
+                [GeminiEnrichmentGlass(type="templado", status=ExtractionStatus.EXPLICIT)],
+                reference="V-20",
+                occurrence_context="fachada norte",
+            ),
+            _glass_element(
+                "south",
+                [GeminiEnrichmentGlass(type="laminado", status=ExtractionStatus.EXPLICIT)],
+                reference="V-20",
+                occurrence_context="fachada sur",
+            ),
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+
+    assert [item.temporary_id for item in result.elements] == ["north", "south"]
+    assert [item.glass[0].type for item in result.elements] == ["templado", "laminado"]
+    assert {decision.reason for decision in decisions} == {DIFFERENT_CONTEXT_REASON}
+
+
+def test_reconciliation_same_reference_different_context_does_not_mix_measurements() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="basement",
+                reference="V-01",
+                occurrence_context="SOTANO",
+                quantity=1,
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=0.9, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=1.45, unit="m"),
+                ],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="level-1",
+                reference="V-01",
+                occurrence_context="NIVEL 1",
+                quantity=1,
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=3.0, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=2.1, unit="m"),
+                ],
+            ),
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+
+    assert [item.temporary_id for item in result.elements] == ["basement", "level-1"]
+    assert [
+        [(measurement.type, measurement.value) for measurement in item.measurements]
+        for item in result.elements
+    ] == [
+        [("width", 0.9), ("height", 1.45)],
+        [("width", 3.0), ("height", 2.1)],
+    ]
+    assert {decision.reason for decision in decisions} == {DIFFERENT_CONTEXT_REASON}
+
+
+def test_glass_scope_general_default_remains_applicable_without_override() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _glass_element(
+                "item-1",
+                [
+                    GeminiEnrichmentGlass(
+                        type="laminado",
+                        composition="5+5",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.72,
+                        notes="Todos los vidrios seran laminados 5+5.",
+                    )
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+    trace = enrichment_inventory_elements(result)[0].glass[0]
+
+    assert result.elements[0].glass[0].type == "laminado"
+    assert trace.scope == GLASS_SCOPE_DOCUMENT_GENERAL
+
+
+def test_glass_scope_item_local_override_precedes_general_default() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _glass_element(
+                "item-1",
+                [
+                    GeminiEnrichmentGlass(
+                        type="laminado",
+                        composition="5+5",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.95,
+                        notes="Todos los vidrios seran laminados 5+5.",
+                    ),
+                    GeminiEnrichmentGlass(
+                        type="templado",
+                        thickness="8 mm",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.61,
+                        notes="V-01 vidrio templado 8 mm.",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+    item = result.elements[0]
+    trace = enrichment_inventory_elements(result)[0].glass
+
+    assert [glass.type for glass in item.glass] == ["templado", "laminado"]
+    assert [glass.scope for glass in trace] == [
+        GLASS_SCOPE_ITEM_LOCAL,
+        GLASS_SCOPE_DOCUMENT_GENERAL,
+    ]
+    assert GLASS_EXPLICIT_CONFLICT not in item.missing_or_unknown
+
+
+def test_glass_scope_section_defaults_follow_occurrence_context() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _glass_element(
+                "level-1",
+                [
+                    GeminiEnrichmentGlass(
+                        type="laminado",
+                        status=ExtractionStatus.EXPLICIT,
+                        notes="NIVEL 1 vidrio laminado.",
+                    )
+                ],
+                reference="V-20",
+                occurrence_context="NIVEL 1",
+            ),
+            _glass_element(
+                "level-2",
+                [
+                    GeminiEnrichmentGlass(
+                        type="templado",
+                        status=ExtractionStatus.EXPLICIT,
+                        notes="NIVEL 2 vidrio templado.",
+                    )
+                ],
+                reference="V-20",
+                occurrence_context="NIVEL 2",
+            ),
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+    trace = enrichment_inventory_elements(result)
+
+    assert [item.glass[0].type for item in result.elements] == ["laminado", "templado"]
+    assert [item.glass[0].scope for item in trace] == [
+        GLASS_SCOPE_SECTION_LEVEL,
+        GLASS_SCOPE_SECTION_LEVEL,
+    ]
+
+
+def test_glass_scope_local_treatment_overrides_general_treatment() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _glass_element(
+                "item-1",
+                [
+                    GeminiEnrichmentGlass(
+                        treatment="pelicula reduccion calor",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.99,
+                        notes="Todos los vidrios tendran pelicula de reduccion de calor.",
+                    ),
+                    GeminiEnrichmentGlass(
+                        treatment="sin pelicula",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.7,
+                        notes="V-01 sin pelicula.",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+    item = result.elements[0]
+    trace = enrichment_inventory_elements(result)[0].glass
+
+    assert [glass.treatment for glass in item.glass] == [
+        "sin pelicula",
+        "pelicula reduccion calor",
+    ]
+    assert [glass.scope for glass in trace] == [
+        GLASS_SCOPE_ITEM_LOCAL,
+        GLASS_SCOPE_DOCUMENT_GENERAL,
+    ]
+
+
+def test_glass_scope_general_type_does_not_conflict_with_local_explicit_type() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _glass_element(
+                "item-1",
+                [
+                    GeminiEnrichmentGlass(
+                        type="laminado",
+                        composition="5+5",
+                        status=ExtractionStatus.EXPLICIT,
+                        notes="Todos los vidrios seran laminados 5+5.",
+                    ),
+                    GeminiEnrichmentGlass(
+                        type="templado",
+                        thickness="8 mm",
+                        status=ExtractionStatus.EXPLICIT,
+                        notes="V-01 vidrio templado 8 mm.",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+    item = result.elements[0]
+
+    assert [glass.type for glass in item.glass] == ["templado", "laminado"]
+    assert [glass.status for glass in item.glass] == [
+        ExtractionStatus.EXPLICIT,
+        ExtractionStatus.EXPLICIT,
+    ]
+    assert GLASS_EXPLICIT_CONFLICT not in item.missing_or_unknown
+
+
+def test_glass_scope_same_scope_explicit_incompatible_marks_conflict() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _glass_element(
+                "item-1",
+                [
+                    GeminiEnrichmentGlass(
+                        type="laminado",
+                        composition="5+5",
+                        status=ExtractionStatus.EXPLICIT,
+                        notes="V-01 vidrio laminado 5+5.",
+                    ),
+                    GeminiEnrichmentGlass(
+                        type="templado",
+                        thickness="8 mm",
+                        status=ExtractionStatus.EXPLICIT,
+                        notes="V-01 vidrio templado 8 mm.",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+    item = result.elements[0]
+
+    assert GLASS_EXPLICIT_CONFLICT in item.missing_or_unknown
+    assert [glass.status for glass in item.glass] == [
+        ExtractionStatus.AMBIGUOUS,
+        ExtractionStatus.AMBIGUOUS,
+    ]
+
+
+def test_glass_scope_neighbor_reference_does_not_become_item_local() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _glass_element(
+                "item-1",
+                [
+                    GeminiEnrichmentGlass(
+                        type="laminado",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.99,
+                        notes="V-02 vidrio laminado.",
+                    ),
+                    GeminiEnrichmentGlass(
+                        type="templado",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.5,
+                        notes="V-01 vidrio templado.",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+    trace = enrichment_inventory_elements(result)[0].glass
+
+    assert [glass.type for glass in result.elements[0].glass] == ["templado", "laminado"]
+    assert [glass.scope for glass in trace] == [
+        GLASS_SCOPE_ITEM_LOCAL,
+        GLASS_SCOPE_UNKNOWN,
+    ]
+
+
+def test_glass_scope_unknown_is_preserved_after_specific_scope() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _glass_element(
+                "item-1",
+                [
+                    GeminiEnrichmentGlass(
+                        type="templado",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.99,
+                    ),
+                    GeminiEnrichmentGlass(
+                        type="laminado",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.4,
+                        notes="V-01 vidrio laminado.",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+    trace = enrichment_inventory_elements(result)[0].glass
+
+    assert [glass.type for glass in result.elements[0].glass] == ["laminado", "templado"]
+    assert [glass.scope for glass in trace] == [
+        GLASS_SCOPE_ITEM_LOCAL,
+        GLASS_SCOPE_UNKNOWN,
+    ]
+
+
+def test_glass_scope_preserves_inferred_when_no_explicit_or_default_exists() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _glass_element(
+                "item-1",
+                [
+                    GeminiEnrichmentGlass(
+                        type="templado",
+                        status=ExtractionStatus.INFERRED,
+                        confidence=0.74,
+                    )
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+    trace = enrichment_inventory_elements(result)[0].glass[0]
+
+    assert result.elements[0].glass[0].type == "templado"
+    assert result.elements[0].glass[0].status == ExtractionStatus.INFERRED
+    assert trace.scope == GLASS_SCOPE_UNKNOWN
+
+
+def test_glass_resolution_mapper_preserves_reconciled_order() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _glass_element(
+                "item-1",
+                [
+                    GeminiEnrichmentGlass(
+                        type="templado",
+                        thickness="8 mm",
+                        status=ExtractionStatus.INFERRED,
+                        confidence=0.95,
+                    ),
+                    GeminiEnrichmentGlass(
+                        type="laminado",
+                        composition="5+5",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.75,
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result, _ = reconcile_inventory_candidates(enrichment)
+    extraction = enrichment_to_gemini_extraction(GeminiDiscoveryResult(), result)
+    mapped = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    assert [glass.type.raw for glass in mapped.elements[0].glass] == ["laminado", "templado"]
+
+
+def test_inventory_trace_records_glass_resolution_by_stage() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            _glass_element(
+                "item-1",
+                [
+                    GeminiEnrichmentGlass(
+                        type="laminado",
+                        composition="5+5",
+                        thickness="5+5",
+                        treatment="low-e",
+                        color="gris",
+                        status=ExtractionStatus.EXPLICIT,
+                        confidence=0.86,
+                    )
+                ],
+            )
+        ]
+    )
+    result, _ = reconcile_inventory_candidates(enrichment)
+    extraction = enrichment_to_gemini_extraction(GeminiDiscoveryResult(), result)
+    mapped = map_gemini_extraction_to_requirement_extraction(extraction)
+
+    enrichment_glass = enrichment_inventory_elements(result)[0].glass[0]
+    final_glass = final_inventory_elements(mapped)[0].glass[0]
+
+    assert enrichment_glass.type == "laminado"
+    assert enrichment_glass.composition == "5+5"
+    assert enrichment_glass.thickness == "5+5"
+    assert enrichment_glass.treatment == "low-e"
+    assert enrichment_glass.color == "gris"
+    assert enrichment_glass.status == "explicit"
+    assert enrichment_glass.confidence == 0.86
+    assert enrichment_glass.scope == GLASS_SCOPE_UNKNOWN
+    assert enrichment_glass.scopeReason == "No reliable glass evidence scope signal."
+    assert enrichment_glass.resolution == "UNKNOWN_EXPLICIT"
+    assert final_glass.type == "laminado"
+    assert final_glass.composition == "5+5"
+    assert final_glass.status == "explicit"
+    assert final_glass.resolution == "EXPLICIT"
+
+def test_item_count_diagnostics_preserves_casa_pereira_nineteen_to_nineteen_regression() -> None:
+    expected = [f"P-{index:02d}" for index in range(1, 20)]
+    trace = _inventory_trace(
+        DISCOVERY=[_trace_item(reference) for reference in expected],
+        ENRICHMENT_BATCH_1=[_trace_item(reference) for reference in expected[:10]],
+        ENRICHMENT_BATCH_2=[_trace_item(reference) for reference in expected[10:]],
+        MERGED_ENRICHMENT=[_trace_item(reference) for reference in expected],
+        PRE_RECONCILIATION=[_trace_item(reference) for reference in expected],
+        POST_RECONCILIATION=[_trace_item(reference) for reference in expected],
+        FINAL_REQUIREMENT_EXTRACTION=[_trace_item(reference) for reference in expected],
+    )
+
+    report = build_item_count_diagnostic_report(
+        case_name="Casa Pereira",
+        expected_items=expected,
+        trace=trace,
+        scoped_count=19,
+    )
+
+    assert report.metrics.expected_count == 19
+    assert report.metrics.actual_count == 19
+    assert report.metrics.missing_count == 0
+    assert report.metrics.unexpected_count == 0
+    assert report.metrics.duplicate_count == 0
+    assert report.metrics.recall == 1.0
+    assert report.metrics.precision == 1.0
+    assert report.stage_counts.enriched == 19
+    assert report.stage_counts.post_reconciliation == 19
+
+
+
+
+def _glass_element(
+    temporary_id: str,
+    glass: list[GeminiEnrichmentGlass],
+    *,
+    reference: str = "V-01",
+    occurrence_context: str | None = None,
+) -> GeminiElementEnrichment:
+    return GeminiElementEnrichment(
+        temporary_id=temporary_id,
+        reference=reference,
+        occurrence_context=occurrence_context,
+        quantity=1,
+        measurements=[GeminiEnrichmentMeasurement(type="width", value=1.2, unit="m")],
+        glass=glass,
+    )
+
+def _profile_element(
+    temporary_id: str,
+    profiles: list[GeminiEnrichmentNamedItem],
+    *,
+    reference: str = "V-01",
+    occurrence_context: str | None = None,
+    functional_type_raw: str | None = None,
+    operation_raw: str | None = None,
+) -> GeminiElementEnrichment:
+    return GeminiElementEnrichment(
+        temporary_id=temporary_id,
+        reference=reference,
+        occurrence_context=occurrence_context,
+        quantity=1,
+        functional_type_raw=functional_type_raw,
+        operation_raw=operation_raw,
+        measurements=[GeminiEnrichmentMeasurement(type="width", value=1.2, unit="m")],
+        profiles=profiles,
+    )
+
+def _inventory_trace(**stages: list[InventoryElementTrace]) -> InventoryDebugTrace:
+    trace = InventoryDebugTrace()
+    for stage, elements in stages.items():
+        trace.add_stage(stage, elements)
+    return trace
+
+
+def _trace_item(
+    reference: str | None,
+    *,
+    temporary_id: str | None = None,
+    id: str | None = None,
+    description: str | None = None,
+) -> InventoryElementTrace:
+    return InventoryElementTrace(
+        id=id,
+        temporary_id=temporary_id,
+        reference=reference,
+        description=description,
+    )
+
+
+def _extra_rows(items) -> set[tuple[str, str, str]]:
+    return {
+        (item.identity, item.reason, item.stage)
+        for item in items
+    }
