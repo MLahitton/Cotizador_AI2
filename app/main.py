@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI
+from fastapi import FastAPI
 
 from app.api.chat import router as chat_router
 from app.api.requirements import router as requirements_router

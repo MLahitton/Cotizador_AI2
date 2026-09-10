@@ -44,6 +44,7 @@ def test_confirmation_status_questions_remain_read_only(message: str) -> None:
     assert intent.actionType == "UNKNOWN"
     assert intent.classificationReason == "INFORMATIONAL_GUARD"
 
+
 def test_interprets_change_system_with_reference() -> None:
     intent = _interpret("cambia V-9 a S50")
 
@@ -208,6 +209,7 @@ def test_interprets_homogeneous_system_batch_with_shared_value() -> None:
     assert intent.targetReferences == ["V-4", "V-5"]
     assert intent.requestedValue == "Monza"
 
+
 @pytest.mark.parametrize(
     ("message", "expected_value"),
     [
@@ -282,6 +284,7 @@ def test_copy_configuration_fails_safe_without_supported_action(message: str) ->
     assert intent.requiresClarification is True
     assert intent.classificationReason == "COPY_CONFIGURATION_UNSUPPORTED"
     assert "Copiar configuracion" in (intent.clarificationReason or "")
+
 
 def test_change_reference_without_system_value_requires_clarification() -> None:
     intent = _interpret("cambia V-01", scope="ITEM")
@@ -781,10 +784,7 @@ def test_pending_system_requested_value_follow_up_completes_action() -> None:
     assert intent.actionType == "CHANGE_SYSTEM"
     assert intent.scope == "REQUIREMENT"
     assert intent.targetReference == "V-01"
-    assert (
-        intent.requestedValue
-        == "CUERPO PROYECTANTE LINEA PREMIUM TIPO EUROPEO VENECIA FERMO"
-    )
+    assert intent.requestedValue == "CUERPO PROYECTANTE LINEA PREMIUM TIPO EUROPEO VENECIA FERMO"
     assert intent.requiresClarification is False
     assert intent.classificationReason == "PENDING_ACTION_FOLLOWUP"
 
@@ -1303,8 +1303,18 @@ def test_contextual_same_reference_different_occurrence_requires_clarification()
         context={
             "technicalProposal": {
                 "items": [
-                    {"itemId": "item-1", "sequence": 1, "reference": "V-01", "occurrenceContext": "Nivel 1"},
-                    {"itemId": "item-2", "sequence": 2, "reference": "V-01", "occurrenceContext": "Nivel 2"},
+                    {
+                        "itemId": "item-1",
+                        "sequence": 1,
+                        "reference": "V-01",
+                        "occurrenceContext": "Nivel 1",
+                    },
+                    {
+                        "itemId": "item-2",
+                        "sequence": 2,
+                        "reference": "V-01",
+                        "occurrenceContext": "Nivel 2",
+                    },
                 ]
             }
         },
@@ -1338,9 +1348,9 @@ def test_chat_action_openapi_exposes_endpoint() -> None:
     assert "/chat/actions/interpret" in openapi["paths"]
     operation = openapi["paths"]["/chat/actions/interpret"]["post"]
     assert "application/json" in operation["requestBody"]["content"]
-    assert operation["responses"]["200"]["content"]["application/json"]["schema"][
-        "$ref"
-    ].endswith("/ChatActionIntent")
+    assert operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/ChatActionIntent"
+    )
 
 
 def _interpret(
@@ -1350,9 +1360,7 @@ def _interpret(
     context: dict | None = None,
 ):
     return ChatActionInterpreter().interpret(
-        ChatActionInterpretRequest.model_validate(
-            _payload(message, scope=scope, context=context)
-        )
+        ChatActionInterpretRequest.model_validate(_payload(message, scope=scope, context=context))
     )
 
 

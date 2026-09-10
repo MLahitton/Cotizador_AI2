@@ -1,4 +1,5 @@
-﻿from pathlib import Path
+# ruff: noqa: E501
+from pathlib import Path
 
 ELEMENT_DISCOVERY_PROMPT = """
 Ejecuta PASS 1: ELEMENT DISCOVERY para AI2.

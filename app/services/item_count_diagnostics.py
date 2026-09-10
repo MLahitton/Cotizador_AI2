@@ -152,19 +152,15 @@ def _metrics(
     expected_total = expected_counter.total()
     actual_total = actual_counter.total()
     true_positives = sum(
-        min(expected_counter[identity], actual_counter[identity])
-        for identity in expected_counter
+        min(expected_counter[identity], actual_counter[identity]) for identity in expected_counter
     )
     missing_count = max(expected_total - true_positives, 0)
     unexpected_count = sum(
-        max(actual_counter[identity] - expected_counter[identity], 0)
-        for identity in actual_counter
+        max(actual_counter[identity] - expected_counter[identity], 0) for identity in actual_counter
     )
     duplicate_count = sum(max(count - 1, 0) for count in actual_counter.values())
     precision = (
-        true_positives / actual_total
-        if actual_total
-        else (1.0 if expected_total == 0 else 0.0)
+        true_positives / actual_total if actual_total else (1.0 if expected_total == 0 else 0.0)
     )
     recall = true_positives / expected_total if expected_total else 1.0
     f1 = 0.0 if precision + recall == 0 else 2 * precision * recall / (precision + recall)
@@ -288,10 +284,7 @@ def _is_duplicate_in_stage(trace: InventoryDebugTrace, stage_name: str, identity
 def _last_seen_stage(trace: InventoryDebugTrace, identity: str) -> str | None:
     last_seen = None
     for stage in trace.stages:
-        identities = [
-            _element_identity(element)
-            for element in stage.elements
-        ]
+        identities = [_element_identity(element) for element in stage.elements]
         if identity in identities:
             last_seen = stage.stage
     return last_seen

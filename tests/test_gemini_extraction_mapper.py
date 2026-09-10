@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 
 from app.models.common import ExtractionStatus
 from app.models.gemini_extraction import (
@@ -249,8 +249,7 @@ def test_mapper_promotes_element_evidence_to_root_evidence_and_ids() -> None:
             GeminiElement(
                 id="v-01",
                 evidence=(
-                    "Planos detalle 1 en pagina 1\n"
-                    "Nota: TODOS LOS VIDRIOS SON DE ESPESOR DE 6mm"
+                    "Planos detalle 1 en pagina 1\nNota: TODOS LOS VIDRIOS SON DE ESPESOR DE 6mm"
                 ),
                 status=ExtractionStatus.EXPLICIT,
                 confidence=0.81,
@@ -622,9 +621,7 @@ def test_mapper_warns_for_large_reported_area_mismatch_without_overwriting_value
     assert area.value == 1.33
     assert area.status == ExtractionStatus.EXPLICIT
     warning = next(
-        warning
-        for warning in result.warnings
-        if warning.code == "MEASUREMENT_AREA_MISMATCH"
+        warning for warning in result.warnings if warning.code == "MEASUREMENT_AREA_MISMATCH"
     )
     assert "13.30 m2" in warning.message
     assert warning.element_ids == ["element-pv"]
@@ -757,10 +754,7 @@ def test_mapper_uses_measurement_text_to_identify_total_area() -> None:
         "area",
         "area",
     ]
-    assert not any(
-        warning.code == "MEASUREMENT_TOTAL_AREA_MISMATCH"
-        for warning in result.warnings
-    )
+    assert not any(warning.code == "MEASUREMENT_TOTAL_AREA_MISMATCH" for warning in result.warnings)
 
 
 def test_mapper_warns_when_total_area_does_not_match_unit_area_times_quantity() -> None:
@@ -781,9 +775,7 @@ def test_mapper_warns_when_total_area_does_not_match_unit_area_times_quantity() 
 
     assert [measurement.value for measurement in result.elements[0].measurements] == [1.8, 9.0]
     warning = next(
-        warning
-        for warning in result.warnings
-        if warning.code == "MEASUREMENT_TOTAL_AREA_MISMATCH"
+        warning for warning in result.warnings if warning.code == "MEASUREMENT_TOTAL_AREA_MISMATCH"
     )
     assert warning.element_ids == ["v-total"]
     assert "5.40 m2" in warning.message
@@ -804,10 +796,7 @@ def test_mapper_does_not_warn_when_total_area_matches_unit_area_times_quantity()
 
     result = map_gemini_extraction_to_requirement_extraction(extraction)
 
-    assert not any(
-        warning.code == "MEASUREMENT_TOTAL_AREA_MISMATCH"
-        for warning in result.warnings
-    )
+    assert not any(warning.code == "MEASUREMENT_TOTAL_AREA_MISMATCH" for warning in result.warnings)
 
 
 def test_mapper_skips_total_area_check_when_quantity_is_null() -> None:
@@ -824,10 +813,7 @@ def test_mapper_skips_total_area_check_when_quantity_is_null() -> None:
 
     result = map_gemini_extraction_to_requirement_extraction(extraction)
 
-    assert not any(
-        warning.code == "MEASUREMENT_TOTAL_AREA_MISMATCH"
-        for warning in result.warnings
-    )
+    assert not any(warning.code == "MEASUREMENT_TOTAL_AREA_MISMATCH" for warning in result.warnings)
 
 
 def test_mapper_skips_total_area_check_when_quantity_is_ambiguous() -> None:
@@ -846,10 +832,7 @@ def test_mapper_skips_total_area_check_when_quantity_is_ambiguous() -> None:
 
     result = map_gemini_extraction_to_requirement_extraction(extraction)
 
-    assert not any(
-        warning.code == "MEASUREMENT_TOTAL_AREA_MISMATCH"
-        for warning in result.warnings
-    )
+    assert not any(warning.code == "MEASUREMENT_TOTAL_AREA_MISMATCH" for warning in result.warnings)
 
 
 def test_mapper_warns_for_multiple_incompatible_measurements_without_reordering() -> None:
@@ -1354,10 +1337,7 @@ def test_mapper_preserves_composite_functional_components(
             GeminiElement(
                 id="composite-item",
                 category="ventana",
-                components=[
-                    GeminiComponent(role=role, quantity=1)
-                    for role in components
-                ],
+                components=[GeminiComponent(role=role, quantity=1) for role in components],
                 status=ExtractionStatus.EXPLICIT,
             )
         ]
@@ -1368,9 +1348,7 @@ def test_mapper_preserves_composite_functional_components(
 
     assert element.assembly_type == "COMPOSITE"
     assert [
-        component.role.normalized
-        for component in element.components
-        if component.role is not None
+        component.role.normalized for component in element.components if component.role is not None
     ] == expected_roles
 
 
@@ -1510,9 +1488,7 @@ def test_mapper_derives_swing_and_fixed_components_from_item_signals() -> None:
     result = map_gemini_extraction_to_requirement_extraction(extraction)
     element = result.elements[0]
     roles = [
-        component.role.normalized
-        for component in element.components
-        if component.role is not None
+        component.role.normalized for component in element.components if component.role is not None
     ]
 
     assert len(result.elements) == 1
@@ -1538,9 +1514,7 @@ def test_mapper_preserves_fixed_only_without_artificial_mobile_component() -> No
     result = map_gemini_extraction_to_requirement_extraction(extraction)
     element = result.elements[0]
     roles = [
-        component.role.normalized
-        for component in element.components
-        if component.role is not None
+        component.role.normalized for component in element.components if component.role is not None
     ]
 
     assert roles == ["FIXED"]
@@ -1563,9 +1537,7 @@ def test_mapper_preserves_swing_only_without_artificial_fixed_component() -> Non
     result = map_gemini_extraction_to_requirement_extraction(extraction)
     element = result.elements[0]
     roles = [
-        component.role.normalized
-        for component in element.components
-        if component.role is not None
+        component.role.normalized for component in element.components if component.role is not None
     ]
 
     assert roles == ["SWING"]
@@ -1617,9 +1589,7 @@ def test_mapper_preserves_conflicting_text_and_structure_as_reviewable_evidence(
     result = map_gemini_extraction_to_requirement_extraction(extraction)
     element = result.elements[0]
     roles = [
-        component.role.normalized
-        for component in element.components
-        if component.role is not None
+        component.role.normalized for component in element.components if component.role is not None
     ]
 
     assert element.assembly_type == "COMPOSITE"
@@ -1629,6 +1599,7 @@ def test_mapper_preserves_conflicting_text_and_structure_as_reviewable_evidence(
     assert element.components[1].role.status == ExtractionStatus.AMBIGUOUS
     assert element.components[1].confidence == 0.45
     assert result.conflicts[0].field == "functional_structure_conflict"
+
 
 def test_mapper_preserves_incomplete_reference_with_reviewable_unknowns() -> None:
     extraction = GeminiExtraction(
@@ -1961,8 +1932,7 @@ def test_enrichment_prompt_requires_visual_support_for_functional_signals() -> N
     assert "NO" in ELEMENT_ENRICHMENT_PROMPT
     assert "autorizan por si solas functional_type_raw" in ELEMENT_ENRICHMENT_PROMPT
     assert (
-        "usa evidencia visual del dibujo asociado al mismo reference"
-        in ELEMENT_ENRICHMENT_PROMPT
+        "usa evidencia visual del dibujo asociado al mismo reference" in ELEMENT_ENRICHMENT_PROMPT
     )
     assert "No uses inferencias globales" in ELEMENT_ENRICHMENT_PROMPT
     assert "Backend selecciona el" in ELEMENT_ENRICHMENT_PROMPT

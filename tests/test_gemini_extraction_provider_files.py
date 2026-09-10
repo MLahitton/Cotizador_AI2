@@ -99,8 +99,7 @@ def _provider_with_fake_client(
 
 def _minimal_pdf_bytes(page_count: int) -> bytes:
     page_objects = "\n".join(
-        f"{index + 3} 0 obj\n<< /Type /Page /Parent 2 0 R >>\nendobj"
-        for index in range(page_count)
+        f"{index + 3} 0 obj\n<< /Type /Page /Parent 2 0 R >>\nendobj" for index in range(page_count)
     )
     return (
         "%PDF-1.7\n"
@@ -230,8 +229,7 @@ def test_extract_from_files_preserves_three_sources_order_and_evidence_source(
     assert provider._provider._client.files.uploads == []
     assert "source-1 | planos.pdf | application/pdf" in prompt
     assert (
-        "source-2 | cuadro.xlsx | "
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "source-2 | cuadro.xlsx | application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     ) in prompt
     assert "source-3 | boceto.png | image/png" in prompt
     assert result.evidence[0].source_id == "source-2"

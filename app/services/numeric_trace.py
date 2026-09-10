@@ -77,8 +77,7 @@ def build_numeric_resolution_trace(
     return NumericResolutionTrace(
         stage=stage,
         elements=[
-            _element_trace(element, source_file_names_by_id)
-            for element in enrichment.elements
+            _element_trace(element, source_file_names_by_id) for element in enrichment.elements
         ],
     )
 
@@ -175,9 +174,7 @@ def _element_trace(
         final_quantity=FinalQuantityTrace(
             element_temporary_id=element.temporary_id,
             value=element.quantity,
-            origin_candidate_field_path="quantity"
-            if element.quantity not in (None, "")
-            else None,
+            origin_candidate_field_path="quantity" if element.quantity not in (None, "") else None,
             status=element.quantity_status or element.status,
             confidence=(
                 element.quantity_confidence
@@ -317,11 +314,7 @@ def _text_numeric_candidates(
                     evidence_text=match.group(0),
                     status=status_override or _status_for_text_role(semantic_role),
                     confidence=None,
-                    grounding_type=(
-                        grounding_type
-                        if semantic_role == "QUANTITY"
-                        else None
-                    ),
+                    grounding_type=(grounding_type if semantic_role == "QUANTITY" else None),
                 )
             )
             if semantic_role == "LEVEL_RANGE":

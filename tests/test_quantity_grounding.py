@@ -284,8 +284,6 @@ def test_xlsx_source_independent_candidates_use_row_reference_and_quantity_label
     assert candidates["V-02"][0].value == 5
 
 
-
-
 def test_component_count_labels_reject_model_quantity_without_quantity_support() -> None:
     examples = [
         "PV-01 N° Cuerpos 5",
@@ -684,20 +682,14 @@ def test_casa_pereira_complete_nineteen_positions_remain_distinct_with_quantity_
         for index, (reference, context, width, height, panel_count) in enumerate(rows, start=1)
     ]
 
-    result, decisions = validate_enrichment_quantities(
-        GeminiEnrichmentResult(elements=elements)
-    )
+    result, decisions = validate_enrichment_quantities(GeminiEnrichmentResult(elements=elements))
 
     assert len(result.elements) == 19
     assert all(element.quantity == 1 for element in result.elements)
-    assert all(
-        element.quantity_status == ExtractionStatus.INFERRED for element in result.elements
-    )
+    assert all(element.quantity_status == ExtractionStatus.INFERRED for element in result.elements)
     assert [element.reference for element in result.elements].count("V-01") == 3
     v01_contexts = [
-        element.occurrence_context
-        for element in result.elements
-        if element.reference == "V-01"
+        element.occurrence_context for element in result.elements if element.reference == "V-01"
     ]
     assert v01_contexts == ["SOTANO", "NIVEL 1", "NIVEL 2"]
     assert [element.panel_count for element in result.elements] == [row[4] for row in rows]

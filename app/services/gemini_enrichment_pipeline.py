@@ -1,4 +1,4 @@
-﻿from app.models.common import ExtractionStatus
+from app.models.common import ExtractionStatus
 from app.models.gemini_discovery import GeminiDiscoveryResult, GeminiElementDiscovery
 from app.models.gemini_enrichment import (
     GeminiElementEnrichment,
@@ -94,7 +94,6 @@ def enrichment_from_discovery(
     )
 
 
-
 def _propagate_discovery_context(
     discovery: GeminiElementDiscovery,
     enrichment: GeminiElementEnrichment,
@@ -131,6 +130,7 @@ def _normalized_context(value: str | None) -> str | None:
         return None
 
     return "_".join(value.strip().casefold().replace("-", "_").split()) or None
+
 
 def enrichment_to_gemini_extraction(
     discovery: GeminiDiscoveryResult,

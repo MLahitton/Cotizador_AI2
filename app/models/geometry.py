@@ -22,4 +22,4 @@ class Geometry(BaseModel):
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
     evidence_ids: list[str] = Field(default_factory=list)
-    notes: str | None = None   
+    notes: str | None = None

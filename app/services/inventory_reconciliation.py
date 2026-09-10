@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from collections import defaultdict
@@ -137,9 +137,7 @@ def reconcile_inventory_candidates(
     for canonical, items in groups.items():
         for context, context_items in _group_by_commercial_context(items):
             if context is None and len(context_items) > 1:
-                distinct_items = _split_ambiguous_duplicate_reference(
-                    context_items, canonical
-                )
+                distinct_items = _split_ambiguous_duplicate_reference(context_items, canonical)
                 if distinct_items is not None:
                     for item in distinct_items:
                         kept.append(item)
@@ -218,7 +216,6 @@ def reconcile_inventory_candidates(
     return result, decisions
 
 
-
 def _split_ambiguous_duplicate_reference(
     items: list[GeminiElementEnrichment],
     canonical: str,
@@ -227,15 +224,14 @@ def _split_ambiguous_duplicate_reference(
     has_context = any(context is not None for context in contexts)
     has_missing_context = any(context is None for context in contexts)
     complete_dimensions = [item for item in items if _has_complete_dimensions(item)]
-    has_distinct_physical_signature = len(
-        {_physical_identity_signature(item) for item in complete_dimensions}
-    ) > 1
+    has_distinct_physical_signature = (
+        len({_physical_identity_signature(item) for item in complete_dimensions}) > 1
+    )
     all_missing_contexts = not has_context and has_missing_context
     mixed_contexts = has_context and has_missing_context
     physically_distinct_inventory_rows = (
-        (mixed_contexts and len(complete_dimensions) == len(items))
-        or (all_missing_contexts and len(complete_dimensions) == len(items))
-    )
+        mixed_contexts and len(complete_dimensions) == len(items)
+    ) or (all_missing_contexts and len(complete_dimensions) == len(items))
 
     if not physically_distinct_inventory_rows or not has_distinct_physical_signature:
         return None
@@ -253,7 +249,6 @@ def _split_ambiguous_duplicate_reference(
     return resolved
 
 
-
 def _has_complete_dimensions(item: GeminiElementEnrichment) -> bool:
     types = {
         _normalized_text(measurement.type)
@@ -261,6 +256,7 @@ def _has_complete_dimensions(item: GeminiElementEnrichment) -> bool:
         if measurement.value is not None or _text(measurement.text)
     }
     return "width" in types and "height" in types
+
 
 def _physical_identity_signature(item: GeminiElementEnrichment) -> tuple[object, ...]:
     dimensions = tuple(
@@ -283,11 +279,11 @@ def _physical_identity_signature(item: GeminiElementEnrichment) -> tuple[object,
     )
 
 
-
 def _normalized_text(value: str | None) -> str | None:
     if not _text(value):
         return None
     return value.strip().casefold()
+
 
 def _is_orphan_reference(element: GeminiElementEnrichment) -> bool:
     if not _text(element.reference):
@@ -393,9 +389,7 @@ def _merge_reference_group(
 ) -> tuple[GeminiElementEnrichment, list[str], list[GeminiElementEnrichment]]:
     ordered = sorted(items, key=lambda item: _commercial_support_score(item), reverse=True)
     base = ordered[0].model_copy(deep=True)
-    warnings = [
-        f"{reason}: merged {len(items)} candidates for {canonical}."
-    ]
+    warnings = [f"{reason}: merged {len(items)} candidates for {canonical}."]
     conflicts: list[str] = []
 
     base.reference = canonical
@@ -434,8 +428,6 @@ def _merge_reference_group(
     warnings.extend(_resolution_warnings(base, canonical))
 
     return base, warnings, ordered
-
-
 
 
 def _resolve_item_preference(element: GeminiElementEnrichment) -> GeminiElementEnrichment:
@@ -531,11 +523,7 @@ def _classify_glass_scope(
     reference = _canonical_reference(element.reference)
     mentioned_references = set(_mentioned_references(corpus))
 
-    if (
-        reference
-        and reference in mentioned_references
-        and not (mentioned_references - {reference})
-    ):
+    if reference and reference in mentioned_references and not (mentioned_references - {reference}):
         return GlassScopeResolution(
             GLASS_SCOPE_ITEM_LOCAL,
             "Evidence text names the current item reference.",
@@ -591,9 +579,7 @@ def _glass_scope_corpus(
                 evidence.sheet_name,
             ]
         )
-    return " ".join(
-        value.strip() for value in values if isinstance(value, str) and value.strip()
-    )
+    return " ".join(value.strip() for value in values if isinstance(value, str) and value.strip())
 
 
 def _mentioned_references(value: str) -> list[str]:
@@ -666,11 +652,7 @@ def _conflicting_explicit_glass_scopes(
         identity = _glass_identity(glass)
         if identity:
             identities_by_scope[scope.scope].add(identity)
-    return {
-        scope
-        for scope, identities in identities_by_scope.items()
-        if len(identities) > 1
-    }
+    return {scope for scope, identities in identities_by_scope.items() if len(identities) > 1}
 
 
 def _is_explicit_principal_glass(glass: GeminiEnrichmentGlass) -> bool:
@@ -691,13 +673,15 @@ def _has_glass_treatment_or_color(glass: GeminiEnrichmentGlass) -> bool:
 
 def _glass_identity(glass: GeminiEnrichmentGlass) -> str:
     return "|".join(
-        part for part in (
+        part
+        for part in (
             _normalize_profile_text(glass.type),
             _normalize_profile_text(glass.composition),
             _normalize_profile_text(glass.thickness),
             _normalize_float(glass.thickness_value),
             _normalize_profile_text(glass.thickness_unit),
-        ) if part
+        )
+        if part
     )
 
 
@@ -705,6 +689,7 @@ def _normalize_float(value: float | None) -> str:
     if value is None:
         return ""
     return f"{value:g}"
+
 
 def _resolve_profile_preference(element: GeminiElementEnrichment) -> GeminiElementEnrichment:
     if not element.profiles:
@@ -822,6 +807,7 @@ def _normalize_profile_text(value: str | None) -> str:
     if not value:
         return ""
     return re.sub(r"\s+", " ", value.strip()).upper()
+
 
 def _candidate_snapshot(element: GeminiElementEnrichment) -> InventoryCandidateSnapshot:
     return InventoryCandidateSnapshot(

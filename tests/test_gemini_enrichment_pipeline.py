@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 
 from openpyxl import Workbook
 
@@ -32,9 +32,9 @@ from app.services.gemini_extraction_mapper import (
     map_gemini_extraction_to_requirement_extraction,
 )
 from app.services.inventory_reconciliation import (
+    CONTEXT_INCOMPLETE_REASON,
     CONTEXT_LABEL,
     CONTEXT_LABEL_NOT_IDENTITY_REASON,
-    CONTEXT_INCOMPLETE_REASON,
     DIFFERENT_CONTEXT_REASON,
     DUPLICATE_REFERENCE_REASON,
     GLASS_EXPLICIT_CONFLICT,
@@ -193,8 +193,7 @@ def _enrichment_response(*temporary_ids: str, usage: tuple[int, int, int] | None
 
 def _scope_response(*items: tuple[str, str], usage: tuple[int, int, int] | None = None):
     elements = ", ".join(
-        f'{{"temporary_id": "{temporary_id}", "scope": "{scope}"}}'
-        for temporary_id, scope in items
+        f'{{"temporary_id": "{temporary_id}", "scope": "{scope}"}}' for temporary_id, scope in items
     )
     usage_metadata = _UsageMetadata(*usage) if usage else None
     return _FakeResponse(f'{{"elements": [{elements}]}}', usage_metadata)
@@ -509,10 +508,7 @@ def test_full_pipeline_mapper_receives_all_items_and_reuses_inline_parts(
     assert len(mapper_calls[0].elements) == 2
     assert provider._provider._client.files.uploads == []
     assert len(provider._provider._client.models.calls) == 4
-    assert all(
-        len(call["contents"]) == 3
-        for call in provider._provider._client.models.calls
-    )
+    assert all(len(call["contents"]) == 3 for call in provider._provider._client.models.calls)
     assert all(
         call["contents"][1].inline_data.mime_type == "application/pdf"
         and call["contents"][2].inline_data.mime_type == "application/pdf"
@@ -738,9 +734,7 @@ def test_uncertain_scope_continues_to_enrichment(tmp_path: Path, monkeypatch) ->
 
     provider.extract_with_discovery_from_files([_pdf(tmp_path)])
 
-    assert [element.id for element in mapper_calls[0].elements] == [
-        "no-glass-word-only"
-    ]
+    assert [element.id for element in mapper_calls[0].elements] == ["no-glass-word-only"]
 
 
 def test_merge_helper_preserves_missing_items_without_provider() -> None:
@@ -784,10 +778,7 @@ def test_enrichment_to_gemini_extraction_preserves_context_as_structured_items()
     element = extraction.elements[0]
 
     assert element.notes is None
-    assert (
-        element.occurrences[0].location
-        == "Habitacion de servicio (Page 1, Detail 1)"
-    )
+    assert element.occurrences[0].location == "Habitacion de servicio (Page 1, Detail 1)"
     assert element.variants[0].label == "Alternativa con vidrio claro"
     assert element.evidence_items[0].source_id == "source-1"
     assert element.evidence_items[0].type == "visual"
@@ -846,7 +837,6 @@ def test_enrichment_to_gemini_extraction_preserves_structured_signals() -> None:
     assert component.geometry == "rectangular"
     assert component.configuration == "fijo"
     assert component.finish == "negro"
-
 
 
 def test_quantity_metadata_is_field_local_in_final_mapping() -> None:
@@ -1196,6 +1186,7 @@ def test_inventory_reconciliation_preserves_legacy_merge_when_context_is_missing
     assert decisions[0].reason == DUPLICATE_REFERENCE_REASON
     assert decisions[0].commercial_context is None
 
+
 def test_inventory_reconciliation_marks_same_reference_source_conflict_for_review() -> None:
     extraction = enrichment_to_gemini_extraction(
         GeminiDiscoveryResult(),
@@ -1331,8 +1322,7 @@ def test_inventory_reconciliation_trace_shows_commercial_quantity_beats_repetiti
         if element.element_temporary_id == "definition"
     )
     roles = {
-        (candidate.semantic_role, candidate.value)
-        for candidate in definition_trace.candidates
+        (candidate.semantic_role, candidate.value) for candidate in definition_trace.candidates
     }
 
     assert ("QUANTITY", 25) in roles
@@ -1464,16 +1454,12 @@ def test_inventory_reconciliation_keeps_context_labels_as_distinct_occurrences()
 
     assert [item.temporary_id for item in result.elements] == ["room-a", "room-b"]
     assert [decision.action for decision in decisions] == ["KEEP", "KEEP"]
-    assert {decision.reason for decision in decisions} == {
-        CONTEXT_LABEL_NOT_IDENTITY_REASON
-    }
+    assert {decision.reason for decision in decisions} == {CONTEXT_LABEL_NOT_IDENTITY_REASON}
     assert {decision.reference_semantics for decision in decisions} == {CONTEXT_LABEL}
     assert all(decision.normalized_reference is None for decision in decisions)
     assert [decision.winner_temporary_id for decision in decisions] == ["room-a", "room-b"]
     assert {
-        candidate.source_ids
-        for decision in decisions
-        for candidate in decision.candidates
+        candidate.source_ids for decision in decisions for candidate in decision.candidates
     } == {
         ("source-1",),
         ("source-2",),
@@ -1589,7 +1575,6 @@ def test_numeric_trace_distinguishes_quantity_level_dimensions_and_component_cou
     )
 
 
-
 def test_numeric_trace_recognizes_component_count_label_value_variants() -> None:
     examples = [
         "PV-01 N° Cuerpos 5",
@@ -1619,8 +1604,7 @@ def test_numeric_trace_recognizes_component_count_label_value_variants() -> None
         )
 
         roles = {
-            (candidate.semantic_role, candidate.value)
-            for candidate in trace.elements[0].candidates
+            (candidate.semantic_role, candidate.value) for candidate in trace.elements[0].candidates
         }
         assert ("COMPONENT_COUNT", 5) in roles, text
 
@@ -1648,8 +1632,7 @@ def test_numeric_trace_recognizes_section_count_label_value_variants() -> None:
         )
 
         roles = {
-            (candidate.semantic_role, candidate.value)
-            for candidate in trace.elements[0].candidates
+            (candidate.semantic_role, candidate.value) for candidate in trace.elements[0].candidates
         }
         assert ("SECTION_COUNT", 3) in roles, text
 
@@ -1717,11 +1700,13 @@ def test_numeric_trace_keeps_multifile_candidate_provenance() -> None:
     )
 
     quantity = next(
-        candidate for candidate in trace.elements[0].candidates
+        candidate
+        for candidate in trace.elements[0].candidates
         if candidate.semantic_role == "QUANTITY"
     )
     floor = next(
-        candidate for candidate in trace.elements[0].candidates
+        candidate
+        for candidate in trace.elements[0].candidates
         if candidate.semantic_role == "FLOOR"
     )
 
@@ -1755,8 +1740,7 @@ def test_numeric_trace_observes_quantity_aliases_without_merging_other_roles() -
     )
 
     roles = [
-        (candidate.semantic_role, candidate.value)
-        for candidate in trace.elements[0].candidates
+        (candidate.semantic_role, candidate.value) for candidate in trace.elements[0].candidates
     ]
 
     assert ("QUANTITY", 7) in roles
@@ -1857,8 +1841,7 @@ def test_full_pipeline_debug_capture_records_numeric_trace_without_changing_quan
     assert debug_capture.numeric_trace is not None
     assert debug_capture.numeric_trace.elements[0].final_quantity.value == 5
     assert {
-        candidate.semantic_role
-        for candidate in debug_capture.numeric_trace.elements[0].candidates
+        candidate.semantic_role for candidate in debug_capture.numeric_trace.elements[0].candidates
     } >= {"QUANTITY", "LEVEL"}
     assert debug_capture.reconciliation_decisions is not None
 
@@ -1926,10 +1909,7 @@ def test_full_pipeline_debug_capture_records_inventory_stage_counts(
     )
 
     assert debug_capture.inventory_trace is not None
-    stage_counts = {
-        stage.stage: stage.count
-        for stage in debug_capture.inventory_trace.stages
-    }
+    stage_counts = {stage.stage: stage.count for stage in debug_capture.inventory_trace.stages}
 
     assert stage_counts["DISCOVERY"] == 2
     assert stage_counts["ENRICHMENT_BATCH_1"] == 2
@@ -1942,11 +1922,9 @@ def test_full_pipeline_debug_capture_records_inventory_stage_counts(
         "KEEP",
         "KEEP",
     ]
-    assert {
-        decision.reason for decision in debug_capture.reconciliation_decisions
-    } == {CONTEXT_LABEL_NOT_IDENTITY_REASON}
-
-
+    assert {decision.reason for decision in debug_capture.reconciliation_decisions} == {
+        CONTEXT_LABEL_NOT_IDENTITY_REASON
+    }
 
 
 def test_item_count_diagnostics_reports_expected_item_present_until_final() -> None:
@@ -2256,7 +2234,6 @@ def test_reconciliation_distinct_contexts_keep_payloads_separate() -> None:
     assert [item.profiles[0].code for item in result.elements] == ["K40", "S50"]
     assert [item.components[0].role for item in result.elements] == ["FIXED", "SLIDING"]
     assert [item.evidence[0].source_id for item in result.elements] == ["source-1", "source-2"]
-
 
 
 def test_profile_resolution_preserves_explicit_and_inferred_profiles() -> None:
@@ -3163,6 +3140,7 @@ def test_inventory_trace_records_glass_resolution_by_stage() -> None:
     assert final_glass.status == "explicit"
     assert final_glass.resolution == "EXPLICIT"
 
+
 def test_item_count_diagnostics_preserves_casa_pereira_nineteen_to_nineteen_regression() -> None:
     expected = [f"P-{index:02d}" for index in range(1, 20)]
     trace = _inventory_trace(
@@ -3191,8 +3169,6 @@ def test_item_count_diagnostics_preserves_casa_pereira_nineteen_to_nineteen_regr
     assert report.metrics.precision == 1.0
     assert report.stage_counts.enriched == 19
     assert report.stage_counts.post_reconciliation == 19
-
-
 
 
 def test_discovery_context_is_propagated_when_enrichment_omits_it() -> None:
@@ -3251,9 +3227,15 @@ def test_discovery_context_conflict_marks_enrichment_ambiguous() -> None:
 def test_repeated_formal_reference_with_distinct_contexts_survives_final_extraction() -> None:
     discovery = GeminiDiscoveryResult(
         elements=[
-            GeminiElementDiscovery(temporary_id="pv-a", reference="PV-01", occurrence_context="LEVEL A"),
-            GeminiElementDiscovery(temporary_id="pv-b", reference="PV-01", occurrence_context="LEVEL B"),
-            GeminiElementDiscovery(temporary_id="pv-c", reference="PV-01", occurrence_context="LEVEL C"),
+            GeminiElementDiscovery(
+                temporary_id="pv-a", reference="PV-01", occurrence_context="LEVEL A"
+            ),
+            GeminiElementDiscovery(
+                temporary_id="pv-b", reference="PV-01", occurrence_context="LEVEL B"
+            ),
+            GeminiElementDiscovery(
+                temporary_id="pv-c", reference="PV-01", occurrence_context="LEVEL C"
+            ),
         ]
     )
     enrichment = GeminiEnrichmentResult(
@@ -3455,6 +3437,7 @@ def _glass_element(
         glass=glass,
     )
 
+
 def _profile_element(
     temporary_id: str,
     profiles: list[GeminiEnrichmentNamedItem],
@@ -3474,6 +3457,7 @@ def _profile_element(
         measurements=[GeminiEnrichmentMeasurement(type="width", value=1.2, unit="m")],
         profiles=profiles,
     )
+
 
 def _inventory_trace(**stages: list[InventoryElementTrace]) -> InventoryDebugTrace:
     trace = InventoryDebugTrace()
@@ -3498,7 +3482,4 @@ def _trace_item(
 
 
 def _extra_rows(items) -> set[tuple[str, str, str]]:
-    return {
-        (item.identity, item.reason, item.stage)
-        for item in items
-    }
+    return {(item.identity, item.reason, item.stage) for item in items}

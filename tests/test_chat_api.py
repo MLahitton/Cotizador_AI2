@@ -1,4 +1,4 @@
-﻿from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient
 from google.genai.errors import APIError
 
 from app.api.chat import get_chat_responder
@@ -96,7 +96,6 @@ def test_chat_responder_uses_structured_output_schema_and_system_instruction() -
     assert call["config"].temperature == 0.2
 
 
-
 def test_chat_system_prompt_hides_internal_codes_in_normal_answers() -> None:
     assert "Never expose internal rule codes" in CHAT_SYSTEM_PROMPT
     assert "unless the user explicitly asks" in CHAT_SYSTEM_PROMPT
@@ -170,6 +169,8 @@ def test_chat_responder_can_return_internal_codes_when_user_explicitly_asks_debu
     assert "Informacion tecnica interna" in response.message
     assert "SYSTEM_SLIDING_DOOR_NAPOLES" in response.message
     assert "SLIDING_DOOR" in response.message
+
+
 def test_chat_responder_accepts_valid_parsed_dict() -> None:
     provider = _FakeGeminiProvider(_FakeGeminiResponse(parsed={"message": "Desde parsed."}))
 
@@ -274,7 +275,6 @@ def _payload(scope: str = "REQUIREMENT", item_id: str | None = None) -> dict:
     }
 
 
-
 def _item_system_reason_payload(user_message: str) -> dict:
     return {
         "scope": "ITEM",
@@ -289,6 +289,7 @@ def _item_system_reason_payload(user_message: str) -> dict:
             "resolutionReasons": ["SYSTEM_SLIDING_DOOR_NAPOLES"],
         },
     }
+
 
 class _FakeGeminiProvider:
     def __init__(self, response) -> None:

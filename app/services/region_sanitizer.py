@@ -187,7 +187,7 @@ def _numeric_region(region: dict[str, Any]) -> dict[str, float] | None:
             "width": float(region["width"]),
             "height": float(region["height"]),
         }
-    except (KeyError, TypeError, ValueError):
+    except KeyError, TypeError, ValueError:
         return None
 
     return numeric

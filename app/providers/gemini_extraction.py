@@ -450,18 +450,14 @@ class GeminiExtractionProvider:
                 debug_capture.raw_responses.append(getattr(response, "text", None))
                 debug_capture.batch_results.append(batch_result)
                 debug_capture.batch_usage.append(usage)
-                debug_capture.quantity_grounding_decisions.extend(
-                    quantity_grounding_decisions
-                )
+                debug_capture.quantity_grounding_decisions.extend(quantity_grounding_decisions)
                 debug_capture.semantic_review_decisions.extend(semantic_review_traces)
                 debug_capture.region_sanitization_events.extend(region_events)
                 debug_capture.inventory_trace.add_stage(
                     f"ENRICHMENT_BATCH_{len(debug_capture.batch_results)}",
                     enrichment_inventory_elements(batch_result),
                 )
-                debug_capture.batch_numeric_traces.append(
-                    batch_numeric_trace
-                )
+                debug_capture.batch_numeric_traces.append(batch_numeric_trace)
 
         merged = merge_enrichment_batches(discovery, batch_results)
         merged.usage = sum_token_usage(batch_usage)
@@ -483,13 +479,9 @@ class GeminiExtractionProvider:
         grounding_decisions: list[QuantityGroundingDecision],
         numeric_trace: NumericResolutionTrace,
     ) -> tuple[GeminiEnrichmentResult, list[SemanticReviewTrace]]:
-        grounding_by_id = {
-            decision.temporary_id: decision
-            for decision in grounding_decisions
-        }
+        grounding_by_id = {decision.temporary_id: decision for decision in grounding_decisions}
         numeric_by_id = {
-            element.element_temporary_id: element
-            for element in numeric_trace.elements
+            element.element_temporary_id: element for element in numeric_trace.elements
         }
         elements = []
         traces = []
@@ -695,24 +687,16 @@ class GeminiEnrichmentDebugCapture:
             [] if self.batch_numeric_traces is None else self.batch_numeric_traces
         )
         self.region_sanitization_events = (
-            []
-            if self.region_sanitization_events is None
-            else self.region_sanitization_events
+            [] if self.region_sanitization_events is None else self.region_sanitization_events
         )
         self.quantity_grounding_decisions = (
-            []
-            if self.quantity_grounding_decisions is None
-            else self.quantity_grounding_decisions
+            [] if self.quantity_grounding_decisions is None else self.quantity_grounding_decisions
         )
         self.semantic_review_decisions = (
-            []
-            if self.semantic_review_decisions is None
-            else self.semantic_review_decisions
+            [] if self.semantic_review_decisions is None else self.semantic_review_decisions
         )
         self.inventory_trace = (
-            InventoryDebugTrace()
-            if self.inventory_trace is None
-            else self.inventory_trace
+            InventoryDebugTrace() if self.inventory_trace is None else self.inventory_trace
         )
 
 
@@ -802,10 +786,7 @@ def _source_ids(file_specs: list[_LocalFileSpec]) -> list[str]:
 
 
 def _source_file_names_by_id(file_specs: list[_LocalFileSpec]) -> dict[str, str]:
-    return {
-        f"source-{index}": spec.path.name
-        for index, spec in enumerate(file_specs, start=1)
-    }
+    return {f"source-{index}": spec.path.name for index, spec in enumerate(file_specs, start=1)}
 
 
 def _file_specs_for_source_ids(
@@ -1095,10 +1076,7 @@ def _safe_text_preview(value: str) -> str:
 def _requested_temporary_ids(batch) -> list[str]:
     return [
         temporary_id
-        for temporary_id in (
-            getattr(item, "temporary_id", None)
-            for item in batch
-        )
+        for temporary_id in (getattr(item, "temporary_id", None) for item in batch)
         if isinstance(temporary_id, str)
     ]
 

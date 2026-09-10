@@ -1,4 +1,4 @@
-﻿from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field
 
 from app.models.common import ExtractionStatus
 from app.models.evidence import Region

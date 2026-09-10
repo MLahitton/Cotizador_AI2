@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 import time
 
 from google.genai import types
@@ -137,8 +137,7 @@ def _validate_candidate_ids(
     unknown = sorted(returned_set - expected)
     if missing:
         raise SimilarityEvaluationError(
-            "Gemini no devolvio evaluacion para candidate_id esperado: "
-            + ", ".join(missing)
+            "Gemini no devolvio evaluacion para candidate_id esperado: " + ", ".join(missing)
         )
     if unknown:
         raise SimilarityEvaluationError(
@@ -161,8 +160,7 @@ def _validate_batch_result_ids(
     unknown_requests = sorted(returned_request_set - expected_request_ids)
     if missing_requests:
         raise SimilarityEvaluationError(
-            "Gemini no devolvio resultado para request_id esperado: "
-            + ", ".join(missing_requests)
+            "Gemini no devolvio resultado para request_id esperado: " + ", ".join(missing_requests)
         )
     if unknown_requests:
         raise SimilarityEvaluationError(

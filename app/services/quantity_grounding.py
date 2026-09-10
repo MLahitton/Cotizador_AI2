@@ -444,9 +444,7 @@ def _has_own_width_and_height(element: GeminiElementEnrichment) -> bool:
         if measurement.value is None:
             continue
         label = " ".join(
-            value
-            for value in (measurement.type, measurement.raw_label, measurement.text)
-            if value
+            value for value in (measurement.type, measurement.raw_label, measurement.text) if value
         )
         if _WIDTH_RE.search(label):
             has_width = True
@@ -516,9 +514,7 @@ def _element_text_fragments(element: GeminiElementEnrichment) -> list[str]:
     fragments.extend(note for note in element.evidence_notes if note)
     for evidence in element.evidence:
         fragments.extend(
-            value
-            for value in (evidence.text, evidence.visual_description, evidence.notes)
-            if value
+            value for value in (evidence.text, evidence.visual_description, evidence.notes) if value
         )
     return fragments
 
@@ -596,6 +592,7 @@ def _component_count_values(element: GeminiElementEnrichment) -> list[int | floa
                 values.append(_parse_number(match.group(1)))
 
     return values
+
 
 def _replace_quantity(
     element: GeminiElementEnrichment,

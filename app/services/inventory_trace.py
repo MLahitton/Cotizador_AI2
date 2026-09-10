@@ -137,7 +137,6 @@ def _enrichment_element_trace(item: GeminiElementEnrichment) -> InventoryElement
     )
 
 
-
 def _enrichment_glass_trace(
     item: GeminiElementEnrichment,
     glass: GeminiEnrichmentGlass,
@@ -185,6 +184,7 @@ def _number_with_unit(value: float | None, unit: str | None) -> str | None:
     if value is None:
         return None
     return f"{value:g}{unit or ''}"
+
 
 def _enrichment_profile_trace(profile: GeminiEnrichmentNamedItem) -> InventoryProfileTrace:
     status = profile.status.value if profile.status else None

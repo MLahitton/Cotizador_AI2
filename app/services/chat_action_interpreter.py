@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 import re
 import unicodedata
 
@@ -13,15 +14,28 @@ from app.models.chat_actions import (
 _AMBIGUOUS = object()
 _VALID_TARGET_PREFIXES = {"V", "PV", "C", "P", "F", "D", "M", "A", "TAG", "HOJA"}
 _TARGET_REFERENCE_PATTERN = re.compile(
-    r"\b(" + "|".join(sorted(_VALID_TARGET_PREFIXES, key=len, reverse=True))
+    r"\b("
+    + "|".join(sorted(_VALID_TARGET_PREFIXES, key=len, reverse=True))
     + r")\s*([-_ ]?)\s*(\d{1,3})([A-Za-z]?)\b",
     re.IGNORECASE,
 )
 _NUMBER_WORDS = {
-    "un": 1, "una": 1, "uno": 1, "dos": 2, "tres": 3, "cuatro": 4,
-    "cinco": 5, "seis": 6, "siete": 7, "ocho": 8, "nueve": 9, "diez": 10,
+    "un": 1,
+    "una": 1,
+    "uno": 1,
+    "dos": 2,
+    "tres": 3,
+    "cuatro": 4,
+    "cinco": 5,
+    "seis": 6,
+    "siete": 7,
+    "ocho": 8,
+    "nueve": 9,
+    "diez": 10,
 }
-_GLASS_CODE_PATTERN = re.compile(r"\b(?:TEMP_\d+(?:[.,]\d+)?|LAM_\d+(?:[.,]\d+)?_\d+(?:[.,]\d+)?)\b", re.IGNORECASE)
+_GLASS_CODE_PATTERN = re.compile(
+    r"\b(?:TEMP_\d+(?:[.,]\d+)?|LAM_\d+(?:[.,]\d+)?_\d+(?:[.,]\d+)?)\b", re.IGNORECASE
+)
 
 
 class ChatActionInterpreter:
@@ -218,9 +232,7 @@ class ChatActionInterpreter:
                 ),
                 requires_clarification=commercial_line is None,
                 clarification_reason=(
-                    "Falta la linea comercial solicitada."
-                    if commercial_line is None
-                    else None
+                    "Falta la linea comercial solicitada." if commercial_line is None else None
                 ),
                 confidence=0.88 if commercial_line is not None else 0.68,
                 classification_reason="COMMERCIAL_LINE_MUTATION",
@@ -243,11 +255,7 @@ class ChatActionInterpreter:
                 requested_value=glass,
                 requested_attributes=requested_attributes,
                 requires_clarification=glass is None,
-                clarification_reason=(
-                    "Falta el vidrio solicitado."
-                    if glass is None
-                    else None
-                ),
+                clarification_reason=("Falta el vidrio solicitado." if glass is None else None),
                 confidence=0.9 if glass is not None else 0.68,
                 classification_reason=_action_reason(
                     classification_reason,
@@ -266,11 +274,7 @@ class ChatActionInterpreter:
                 requested_value=finish,
                 requested_attributes=_attributes_for_action("CHANGE_FINISH", finish, text),
                 requires_clarification=finish is None,
-                clarification_reason=(
-                    "Falta el acabado solicitado."
-                    if finish is None
-                    else None
-                ),
+                clarification_reason=("Falta el acabado solicitado." if finish is None else None),
                 confidence=0.9 if finish is not None else 0.68,
                 classification_reason=_action_reason("FINISH_MUTATION", target_references),
             )
@@ -286,11 +290,7 @@ class ChatActionInterpreter:
                 requested_value=system,
                 requested_attributes=_attributes_for_action("CHANGE_SYSTEM", system, text),
                 requires_clarification=system is None,
-                clarification_reason=(
-                    "Falta el sistema solicitado."
-                    if system is None
-                    else None
-                ),
+                clarification_reason=("Falta el sistema solicitado." if system is None else None),
                 confidence=0.92 if system is not None else 0.68,
                 classification_reason=_action_reason(
                     (
@@ -513,9 +513,7 @@ def _contextual_system_change_candidates(
             continue
 
         target_references = _dedupe_references(
-            reference
-            for assignment in assignments
-            for reference in assignment["target_references"]
+            reference for assignment in assignments for reference in assignment["target_references"]
         )
         if not target_references:
             continue
@@ -532,10 +530,14 @@ def _contextual_system_change_candidates(
 
 
 def _contextual_fallback_action_type(text: str) -> str:
-    return "CHANGE_SYSTEM" if any(
-        phrase in text
-        for phrase in ("sistema", "sistemas", "opcion", "opciones", "cambio", "cambios")
-    ) else "UNKNOWN"
+    return (
+        "CHANGE_SYSTEM"
+        if any(
+            phrase in text
+            for phrase in ("sistema", "sistemas", "opcion", "opciones", "cambio", "cambios")
+        )
+        else "UNKNOWN"
+    )
 
 
 def _system_assignments(message: str) -> list[dict]:
@@ -608,7 +610,11 @@ def _context_items(context: object) -> list[dict]:
     if not isinstance(context, dict):
         return []
 
-    source = context.get("originalContext") if isinstance(context.get("originalContext"), dict) else context
+    source = (
+        context.get("originalContext")
+        if isinstance(context.get("originalContext"), dict)
+        else context
+    )
     proposal = source.get("technicalProposal") if isinstance(source, dict) else None
     items = proposal.get("items") if isinstance(proposal, dict) else None
     if isinstance(items, list):
@@ -657,7 +663,10 @@ def _pending_action_follow_up(
 
     if "lo mismo" in text and message_target is not None:
         requested_value = _optional_str(pending_action.get("requestedValue"))
-        if action_type in {"CHANGE_SYSTEM", "CHANGE_FINISH", "CHANGE_GLASS"} and requested_value is not None:
+        if (
+            action_type in {"CHANGE_SYSTEM", "CHANGE_FINISH", "CHANGE_GLASS"}
+            and requested_value is not None
+        ):
             return _intent(
                 request,
                 action_type=action_type,
@@ -716,9 +725,7 @@ def _pending_action_follow_up(
 
     if action_type in {"CHANGE_SYSTEM", "CHANGE_FINISH", "CHANGE_GLASS"}:
         value = (
-            option_value
-            if isinstance(option_value, str)
-            else _follow_up_requested_value(message)
+            option_value if isinstance(option_value, str) else _follow_up_requested_value(message)
         )
         if _is_ambiguous_follow_up(text) or value is None:
             return _pending_clarification(
@@ -835,11 +842,7 @@ def _target_follow_up_reference(message: str, options: object) -> str | object |
     if explicit_target is None:
         return _AMBIGUOUS if _is_option_reference(_normalize_text(message)) else None
     if _has_available_target_options(options):
-        return (
-            explicit_target
-            if _target_is_available(explicit_target, options)
-            else _AMBIGUOUS
-        )
+        return explicit_target if _target_is_available(explicit_target, options) else _AMBIGUOUS
     return explicit_target
 
 
@@ -858,9 +861,7 @@ def _pending_target_references(pending_action: dict) -> list[str]:
     references = pending_action.get("targetReferences")
     if isinstance(references, list):
         return _dedupe_references(
-            reference
-            for reference in references
-            if isinstance(reference, str)
+            reference for reference in references if isinstance(reference, str)
         )
     target_reference = _optional_str(pending_action.get("targetReference"))
     return [target_reference] if target_reference else []
@@ -1071,9 +1072,7 @@ def _normalize_text(value: str) -> str:
     for source, target in replacements.items():
         text = text.replace(source, target)
     text = "".join(
-        char
-        for char in unicodedata.normalize("NFD", text)
-        if unicodedata.category(char) != "Mn"
+        char for char in unicodedata.normalize("NFD", text) if unicodedata.category(char) != "Mn"
     )
     return text
 
@@ -1125,7 +1124,9 @@ def _has_mutation_intent(text: str) -> bool:
         pattern.search(text)
         for pattern in (
             re.compile(r"\b(cambia|cambias|cambialo|cambiar|modifica|reemplaza|actualiza)\b"),
-            re.compile(r"\b(pon|poner|ponlo|ponle|ponerle|usa|usar|ajusta|sube|baja|deja|dejale|dejalo)\b"),
+            re.compile(
+                r"\b(pon|poner|ponlo|ponle|ponerle|usa|usar|ajusta|sube|baja|deja|dejale|dejalo)\b"
+            ),
             re.compile(r"\b(quita|quitalo|excluye|excluyelo|saca|sacalo|elimina)\b"),
             re.compile(r"\b(incluye|incluyelo|incluir|incluirlo|agrega|agregalo)\b"),
             re.compile(r"\bvuelve\s+a\s+incluir\b"),
@@ -1273,8 +1274,7 @@ def _glass_code_match(text: str) -> re.Match[str] | None:
 
 def _has_finish_intent(text: str) -> bool:
     return any(
-        word in text
-        for word in ("acabado", "color", "inox", "negro", "blanco", "gris", "champana")
+        word in text for word in ("acabado", "color", "inox", "negro", "blanco", "gris", "champana")
     )
 
 
@@ -1299,12 +1299,16 @@ def _has_quantity_intent(text: str) -> bool:
 
 def _quantity(text: str) -> int | None:
     cleaned = _strip_target_references(text)
-    match = re.search(r"\b(?:cantidad\s*(?:a|en|para)?\s*)?(\d+)\s*(?:unidades|unidad|und|de estos)?\b", cleaned)
+    match = re.search(
+        r"\b(?:cantidad\s*(?:a|en|para)?\s*)?(\d+)\s*(?:unidades|unidad|und|de estos)?\b", cleaned
+    )
     if match:
         value = int(match.group(1))
         return value if value > 0 else None
     word_match = re.search(
-        r"\b(?:cantidad\s*(?:a|en|para)?\s*)?(" + "|".join(_NUMBER_WORDS) + r")\s*(?:unidades|unidad|und|de estos)?\b",
+        r"\b(?:cantidad\s*(?:a|en|para)?\s*)?("
+        + "|".join(_NUMBER_WORDS)
+        + r")\s*(?:unidades|unidad|und|de estos)?\b",
         cleaned,
     )
     if word_match:
@@ -1405,8 +1409,7 @@ def _has_include_intent(text: str) -> bool:
 
 def _has_commercial_line_intent(text: str) -> bool:
     return any(
-        word in text
-        for word in ("premium", "essential", "essentials", "signature", "linea")
+        word in text for word in ("premium", "essential", "essentials", "signature", "linea")
     )
 
 
@@ -1556,18 +1559,22 @@ def _option_target_reference(option: object) -> str | None:
 
 def _is_option_reference(text: str) -> bool:
     stripped = text.strip()
-    return stripped in {
-        "la primera",
-        "primera",
-        "la segunda",
-        "segunda",
-        "la tercera",
-        "tercera",
-        "esa",
-        "ese",
-        "la que dijiste",
-        "el que dijiste",
-    } or re.fullmatch(r"(?:la\s+)?opcion\s+\d+", stripped) is not None
+    return (
+        stripped
+        in {
+            "la primera",
+            "primera",
+            "la segunda",
+            "segunda",
+            "la tercera",
+            "tercera",
+            "esa",
+            "ese",
+            "la que dijiste",
+            "el que dijiste",
+        }
+        or re.fullmatch(r"(?:la\s+)?opcion\s+\d+", stripped) is not None
+    )
 
 
 def _option_index(text: str) -> int | None:
@@ -1763,14 +1770,10 @@ def _finish_attributes(
         texture="MATTE" if "mate" in normalized else None,
         process="ANODIZED" if "anodizado" in normalized else None,
         material=(
-            "STAINLESS_STEEL"
-            if "inox" in normalized or "acero inoxidable" in normalized
-            else None
+            "STAINLESS_STEEL" if "inox" in normalized or "acero inoxidable" in normalized else None
         ),
         normalizedType=(
-            "STAINLESS_STEEL"
-            if "inox" in normalized or "acero inoxidable" in normalized
-            else None
+            "STAINLESS_STEEL" if "inox" in normalized or "acero inoxidable" in normalized else None
         ),
     )
 

@@ -1,4 +1,4 @@
-﻿import json
+import json
 
 from google.genai import types
 

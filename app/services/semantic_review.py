@@ -368,9 +368,7 @@ def build_quantity_review_numeric_context(
             and candidate.grounding_type == MODEL_EVIDENCE_QUANTITY
         ):
             item["evidence_text"] = None
-            item["note"] = (
-                "First-pass quantity evidence text omitted; re-read original source."
-            )
+            item["note"] = "First-pass quantity evidence text omitted; re-read original source."
         candidates.append(item)
 
     return QuantityReviewNumericContext(
@@ -662,9 +660,8 @@ def completed_review_trace(
         reviewed_value=review.reviewed_value,
         locator=locator,
     )
-    correction_proposed = (
-        review.decision == "CORRECTED"
-        and not _same_optional_value(element_before.quantity, review.reviewed_value)
+    correction_proposed = review.decision == "CORRECTED" and not _same_optional_value(
+        element_before.quantity, review.reviewed_value
     )
     correction_applied = (
         correction_proposed
@@ -672,9 +669,7 @@ def completed_review_trace(
         and not _same_optional_value(element_before.quantity, element_after.quantity)
     )
     effective_decision = (
-        "AMBIGUOUS"
-        if correction_proposed and not correction_applied
-        else review.decision
+        "AMBIGUOUS" if correction_proposed and not correction_applied else review.decision
     )
     collision = quantity_numeric_collision_summary(element_before.quantity, numeric_trace)
     confirmation_support = evaluate_confirmed_quantity_support(
@@ -686,10 +681,7 @@ def completed_review_trace(
         review,
         numeric_trace,
     )
-    if (
-        confirmation_cross_check_called
-        and confirmation_support.support_level == "INSUFFICIENT"
-    ):
+    if confirmation_cross_check_called and confirmation_support.support_level == "INSUFFICIENT":
         effective_decision = "AMBIGUOUS"
     return SemanticReviewTrace(
         reference=element_before.reference,

@@ -1,4 +1,4 @@
-﻿import json
+import json
 
 from app.models.similarity import (
     SimilarityBatchRequestItem,
@@ -107,10 +107,14 @@ def build_similarity_prompt(
         "element": element.model_dump(mode="json"),
         "candidates": [_candidate_prompt_payload(candidate) for candidate in candidates],
     }
-    return SIMILARITY_SYSTEM_PROMPT + "\nINPUT DATA JSON:\n" + json.dumps(
-        payload,
-        indent=2,
-        ensure_ascii=False,
+    return (
+        SIMILARITY_SYSTEM_PROMPT
+        + "\nINPUT DATA JSON:\n"
+        + json.dumps(
+            payload,
+            indent=2,
+            ensure_ascii=False,
+        )
     )
 
 
@@ -123,17 +127,20 @@ def build_similarity_batch_prompt(
                 "request_id": request.request_id,
                 "element": request.element.model_dump(mode="json"),
                 "candidates": [
-                    _candidate_prompt_payload(candidate)
-                    for candidate in request.candidates
+                    _candidate_prompt_payload(candidate) for candidate in request.candidates
                 ],
             }
             for request in requests
         ],
     }
-    return SIMILARITY_BATCH_SYSTEM_PROMPT + "\nINPUT DATA JSON:\n" + json.dumps(
-        payload,
-        indent=2,
-        ensure_ascii=False,
+    return (
+        SIMILARITY_BATCH_SYSTEM_PROMPT
+        + "\nINPUT DATA JSON:\n"
+        + json.dumps(
+            payload,
+            indent=2,
+            ensure_ascii=False,
+        )
     )
 
 

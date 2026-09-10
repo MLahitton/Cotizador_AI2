@@ -160,9 +160,7 @@ def test_apply_quantity_review_rejects_correction_without_local_support() -> Non
     assert updated.quantity == 1
     assert updated.quantity_status == ExtractionStatus.AMBIGUOUS
     assert updated.quantity_confidence == 0.5
-    assert REVIEW_CORRECTION_REJECTED_INSUFFICIENT_LOCAL_SUPPORT in (
-        updated.missing_or_unknown
-    )
+    assert REVIEW_CORRECTION_REJECTED_INSUFFICIENT_LOCAL_SUPPORT in (updated.missing_or_unknown)
     assert updated.functional_type_raw == element.functional_type_raw
     assert updated.geometry_raw == element.geometry_raw
     assert updated.measurements == element.measurements
@@ -323,13 +321,10 @@ def test_quantity_review_numeric_context_omits_first_pass_quantity_evidence_text
     quantity_evidence_candidates = [
         candidate
         for candidate in context.candidates
-        if candidate["semantic_role"] == "QUANTITY"
-        and candidate["field_path"] == "evidence[1]"
+        if candidate["semantic_role"] == "QUANTITY" and candidate["field_path"] == "evidence[1]"
     ]
     assert quantity_evidence_candidates[0]["evidence_text"] is None
-    assert "First-pass quantity evidence text omitted" in (
-        quantity_evidence_candidates[0]["note"]
-    )
+    assert "First-pass quantity evidence text omitted" in (quantity_evidence_candidates[0]["note"])
     assert any(
         candidate["semantic_role"] == "LEVEL_RANGE"
         and candidate["evidence_text"] == "NIVELES 5 AL 9"

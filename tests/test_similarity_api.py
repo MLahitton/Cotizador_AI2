@@ -199,9 +199,9 @@ def test_similarity_openapi_exposes_response_schema() -> None:
     response_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
     assert response_schema["$ref"].endswith("/SimilarityEvaluationResult")
     assert "application/json" in batch_operation["requestBody"]["content"]
-    batch_response_schema = batch_operation["responses"]["200"]["content"][
-        "application/json"
-    ]["schema"]
+    batch_response_schema = batch_operation["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ]
     assert batch_response_schema["$ref"].endswith("/SimilarityBatchEvaluationResult")
 
 

@@ -69,9 +69,7 @@ def test_empty_file_produces_controlled_error(tmp_path: Path) -> None:
     assert inspection.source.sha256 == calculate_sha256(workbook_path)
     assert inspection.source.workbook_type == HistoricalWorkbookType.UNKNOWN
     assert inspection.is_processable is False
-    assert [issue.code for issue in inspection.issues] == [
-        HistoricalWorkbookIssueCode.EMPTY_FILE
-    ]
+    assert [issue.code for issue in inspection.issues] == [HistoricalWorkbookIssueCode.EMPTY_FILE]
 
 
 def test_unknown_content_is_classified_without_stacktrace(tmp_path: Path) -> None:

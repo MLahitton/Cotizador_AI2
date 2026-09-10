@@ -84,16 +84,10 @@ async def extract_requirement(
         try:
             failed_stage = "PROVIDER_INIT"
             provider = (
-                provider_dependency()
-                if callable(provider_dependency)
-                else provider_dependency
+                provider_dependency() if callable(provider_dependency) else provider_dependency
             )
             pipeline_trace_enabled = _public_pipeline_trace_enabled()
-            debug_capture = (
-                GeminiFullPipelineDebugCapture()
-                if pipeline_trace_enabled
-                else None
-            )
+            debug_capture = GeminiFullPipelineDebugCapture() if pipeline_trace_enabled else None
             processing_attempt_id = str(uuid.uuid4())
             failed_stage = "LLM_STRUCTURED_EXTRACTION"
             extraction_started = time.perf_counter()
@@ -197,8 +191,7 @@ def _safe_upload_file_name(file_name: str) -> str:
     name = Path(file_name).name or "upload"
     forbidden = '<>:"/\\|?*'
     safe_name = "".join(
-        "_" if character in forbidden or ord(character) < 32 else character
-        for character in name
+        "_" if character in forbidden or ord(character) < 32 else character for character in name
     )
     return safe_name or "upload"
 

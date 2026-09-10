@@ -116,9 +116,7 @@ def test_effiliving_regression_trace_reports_raw_grounded_final_and_total() -> N
         ),
         enrichment_debug=SimpleNamespace(
             raw_responses=[
-                '{"elements": ['
-                '{"temporary_id": "v-10", "reference": "V-10", "quantity": 5}'
-                "]}"
+                '{"elements": [{"temporary_id": "v-10", "reference": "V-10", "quantity": 5}]}'
             ],
             batch_results=[
                 GeminiEnrichmentResult(

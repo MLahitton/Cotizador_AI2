@@ -1,4 +1,4 @@
-﻿import re
+import re
 import unicodedata
 
 from app.models.common import ExtractionStatus, NormalizedValue, TraceableValue
@@ -112,11 +112,7 @@ def _status_for_value(
     value: object | None,
     status: ExtractionStatus | None,
 ) -> ExtractionStatus:
-    if (
-        value in (None, "", [])
-        and status is not None
-        and status != ExtractionStatus.NOT_APPLICABLE
-    ):
+    if value in (None, "", []) and status is not None and status != ExtractionStatus.NOT_APPLICABLE:
         return ExtractionStatus.UNKNOWN
 
     return _status(status, _status_from_value(value))
@@ -295,8 +291,7 @@ def _map_element(
             component_candidates,
         ),
         measurements=[
-            _map_measurement(measurement, evidence_ids)
-            for measurement in item.measurements
+            _map_measurement(measurement, evidence_ids) for measurement in item.measurements
         ],
         quantity=_map_optional_traceable_field(
             item.quantity,
@@ -342,7 +337,6 @@ def _map_element(
         confidence=item.confidence,
         notes=item.notes,
     )
-
 
 
 def _suppress_unsupported_visual_function_signals(item: GeminiElement) -> GeminiElement:
@@ -470,6 +464,7 @@ def _append_note(current: str | None, note: str) -> str:
     if note in current:
         return current
     return f"{current}\n{note}"
+
 
 def _map_optional_normalized_field(
     raw: str | None,
@@ -728,10 +723,7 @@ def _measurement_total_area_mismatch_warnings(
             )
         warnings.append(
             Warning(
-                id=(
-                    f"warning-{TOTAL_AREA_MISMATCH_WARNING_CODE.casefold()}-"
-                    f"{len(warnings) + 1}"
-                ),
+                id=(f"warning-{TOTAL_AREA_MISMATCH_WARNING_CODE.casefold()}-{len(warnings) + 1}"),
                 code=TOTAL_AREA_MISMATCH_WARNING_CODE,
                 severity="warning",
                 message=(
@@ -795,11 +787,7 @@ def _first_area_measurement_by_scope(
 
 def _area_measurement_scope(measurement: Measurement) -> str:
     text = _compact_text(
-        " ".join(
-            value
-            for value in (measurement.raw_label, measurement.notes)
-            if value
-        )
+        " ".join(value for value in (measurement.raw_label, measurement.notes) if value)
     )
     if text in {"areaunitaria", "m2unitario", "unitarea", "unitm2"}:
         return AREA_SCOPE_UNIT
@@ -839,12 +827,11 @@ def _first_conflicting_measurement_pair(
     measurements: list[Measurement],
 ) -> tuple[Measurement, Measurement] | None:
     normalized = [
-        (measurement, _measurement_to_base_unit(measurement))
-        for measurement in measurements
+        (measurement, _measurement_to_base_unit(measurement)) for measurement in measurements
     ]
     normalized = [item for item in normalized if item[1] is not None]
     for index, (first, first_value) in enumerate(normalized):
-        for second, second_value in normalized[index + 1:]:
+        for second, second_value in normalized[index + 1 :]:
             if first_value is None or second_value is None:
                 continue
             if not _within_area_tolerance(first_value, second_value):
@@ -864,8 +851,7 @@ def _within_area_tolerance(expected: float, reported: float) -> bool:
     difference = abs(expected - reported)
     relative_difference = difference / expected if expected else 0
     return (
-        difference <= AREA_ABSOLUTE_TOLERANCE_M2
-        or relative_difference <= AREA_RELATIVE_TOLERANCE
+        difference <= AREA_ABSOLUTE_TOLERANCE_M2 or relative_difference <= AREA_RELATIVE_TOLERANCE
     )
 
 
@@ -874,11 +860,7 @@ def _measurement_warning_sources(
     evidence_by_id: dict[str, Evidence],
 ) -> tuple[list[str], list[str]]:
     evidence_ids = _unique_ids(
-        [
-            evidence_id
-            for measurement in measurements
-            for evidence_id in measurement.evidence_ids
-        ]
+        [evidence_id for measurement in measurements for evidence_id in measurement.evidence_ids]
     )
     source_ids = _unique_ids(
         [
@@ -990,17 +972,22 @@ def _map_configuration(
         if fixed_panel_count is not None
         else _fixed_count_from_modulation(resolved_modulation)
     )
-    if description in (None, "") and not any(
-        [
-            operation,
-            resolved_panel_count,
-            movable_panel_count,
-            fixed_panel_count,
-            resolved_modulation,
-            opening_direction,
-            normalized_features,
-        ]
-    ) and status is None and confidence is None:
+    if (
+        description in (None, "")
+        and not any(
+            [
+                operation,
+                resolved_panel_count,
+                movable_panel_count,
+                fixed_panel_count,
+                resolved_modulation,
+                opening_direction,
+                normalized_features,
+            ]
+        )
+        and status is None
+        and confidence is None
+    ):
         return None
 
     return Configuration(
@@ -1709,8 +1696,7 @@ def _map_occurrence(
         typology=_traceable(item.typology, item.status, item.confidence, evidence_ids),
         quantity=_traceable(item.quantity, item.status, item.confidence, evidence_ids),
         measurements=[
-            _map_measurement(measurement, evidence_ids)
-            for measurement in item.measurements
+            _map_measurement(measurement, evidence_ids) for measurement in item.measurements
         ],
         evidence_ids=evidence_ids,
         confidence=item.confidence,
@@ -1724,8 +1710,7 @@ def _map_variant(item: GeminiVariant, index: int, evidence_ids: list[str]) -> Va
         label=item.label,
         reason=item.reason,
         measurements=[
-            _map_measurement(measurement, evidence_ids)
-            for measurement in item.measurements
+            _map_measurement(measurement, evidence_ids) for measurement in item.measurements
         ],
         configuration=_map_configuration(
             item.configuration,
@@ -1768,8 +1753,7 @@ def _map_component(item: GeminiComponent, index: int, evidence_ids: list[str]) -
             evidence_ids,
         ),
         measurements=[
-            _map_measurement(measurement, evidence_ids)
-            for measurement in item.measurements
+            _map_measurement(measurement, evidence_ids) for measurement in item.measurements
         ],
         configuration=_map_configuration(
             item.configuration,
