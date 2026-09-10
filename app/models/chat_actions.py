@@ -12,6 +12,7 @@ ChatActionType = Literal[
     "CHANGE_DIMENSIONS",
     "EXCLUDE_ITEM",
     "INCLUDE_ITEM",
+    "CONFIRM_SELECTION",
     "CHANGE_COMMERCIAL_LINE",
     "UNKNOWN",
 ]

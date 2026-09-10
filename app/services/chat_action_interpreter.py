@@ -11,6 +11,17 @@ from app.models.chat_actions import (
 )
 
 _AMBIGUOUS = object()
+_VALID_TARGET_PREFIXES = {"V", "PV", "C", "P", "F", "D", "M", "A", "TAG", "HOJA"}
+_TARGET_REFERENCE_PATTERN = re.compile(
+    r"\b(" + "|".join(sorted(_VALID_TARGET_PREFIXES, key=len, reverse=True))
+    + r")\s*([-_ ]?)\s*(\d{1,3})([A-Za-z]?)\b",
+    re.IGNORECASE,
+)
+_NUMBER_WORDS = {
+    "un": 1, "una": 1, "uno": 1, "dos": 2, "tres": 3, "cuatro": 4,
+    "cinco": 5, "seis": 6, "siete": 7, "ocho": 8, "nueve": 9, "diez": 10,
+}
+_GLASS_CODE_PATTERN = re.compile(r"\b(?:TEMP_\d+(?:[.,]\d+)?|LAM_\d+(?:[.,]\d+)?_\d+(?:[.,]\d+)?)\b", re.IGNORECASE)
 
 
 class ChatActionInterpreter:
@@ -18,7 +29,8 @@ class ChatActionInterpreter:
         message = request.userMessage.strip()
         text = _normalize_text(message)
         scope = _scope(request)
-        target_references = _target_references(message)
+        dimension_text = _strip_dimension_expressions(text)
+        target_references = _target_references(dimension_text)
         target_reference = target_references[0] if target_references else None
         has_mutation = _has_mutation_intent(text)
         pending_action = _pending_action(request)
@@ -46,6 +58,16 @@ class ChatActionInterpreter:
             if follow_up is not None:
                 return follow_up
 
+        if _has_confirm_selection_action_intent(text):
+            return _intent(
+                request,
+                action_type="CONFIRM_SELECTION",
+                scope="REQUIREMENT",
+                target_reference=None,
+                target_references=[],
+                confidence=0.91,
+                classification_reason="CONFIRM_SELECTION_MUTATION",
+            )
         if _is_informational(text) and not has_mutation:
             return _intent(
                 request,
@@ -56,6 +78,24 @@ class ChatActionInterpreter:
                 is_action=False,
                 confidence=0.9,
                 classification_reason="INFORMATIONAL_GUARD",
+            )
+
+        contextual_intent = _contextual_action_intent(request, text, scope)
+        if contextual_intent is not None:
+            return contextual_intent
+
+        if _has_copy_configuration_intent(text):
+            return _intent(
+                request,
+                action_type="UNKNOWN",
+                scope=scope,
+                target_reference=target_reference,
+                target_references=target_references,
+                is_action=False,
+                requires_clarification=True,
+                clarification_reason="Copiar configuracion entre items aun no esta disponible en el chat.",
+                confidence=0.82,
+                classification_reason="COPY_CONFIGURATION_UNSUPPORTED",
             )
 
         if _is_heterogeneous_batch(message, text, target_references):
@@ -89,6 +129,21 @@ class ChatActionInterpreter:
                     "EXPLICIT_DIMENSION_MUTATION",
                     target_references,
                 ),
+            )
+        partial_dimension = _partial_dimension_mm(text)
+        if partial_dimension is not None and _has_dimension_intent(text):
+            return _intent(
+                request,
+                action_type="CHANGE_DIMENSIONS",
+                scope=scope,
+                target_reference=target_reference,
+                target_references=target_references,
+                requested_width_mm=partial_dimension[0],
+                requested_height_mm=partial_dimension[1],
+                requires_clarification=True,
+                clarification_reason="Falta la otra dimension para preparar el cambio de medidas.",
+                confidence=0.68,
+                classification_reason="PARTIAL_DIMENSION_MUTATION",
             )
 
         quantity = _quantity(text)
@@ -314,6 +369,255 @@ def _intent(
     )
 
 
+def _contextual_action_intent(
+    request: ChatActionInterpretRequest,
+    text: str,
+    scope: str,
+) -> ChatActionIntent | None:
+    if not _is_contextual_action_reference(text):
+        return None
+
+    resolution = _latest_contextual_system_change(request)
+    if resolution is None:
+        return _intent(
+            request,
+            action_type=_contextual_fallback_action_type(text),
+            scope=scope,
+            target_reference=None,
+            target_references=[],
+            is_action=False,
+            requires_clarification=True,
+            clarification_reason="No tengo un cambio conversado suficientemente claro para prepararlo.",
+            confidence=0.55,
+            classification_reason="CONTEXTUAL_ACTION_NOT_RESOLVED",
+        )
+
+    if resolution["state"] == "AMBIGUOUS":
+        return _intent(
+            request,
+            action_type="CHANGE_SYSTEM",
+            scope=scope,
+            target_reference=None,
+            target_references=[],
+            is_action=False,
+            requires_clarification=True,
+            clarification_reason="Hay mas de un cambio conversado posible. Indica los elementos y el sistema que quieres aplicar.",
+            confidence=0.58,
+            classification_reason=resolution["reason"],
+        )
+
+    target_references = resolution["target_references"]
+    requested_value = resolution["requested_value"]
+    return _intent(
+        request,
+        action_type="CHANGE_SYSTEM",
+        scope="REQUIREMENT" if len(target_references) > 1 else scope,
+        target_reference=target_references[0] if target_references else None,
+        target_references=target_references,
+        requested_value=requested_value,
+        requested_attributes=_attributes_for_action("CHANGE_SYSTEM", requested_value, text),
+        confidence=0.86,
+        classification_reason="CONTEXTUAL_SYSTEM_CHANGE_RESOLVED",
+    )
+
+
+def _is_contextual_action_reference(text: str) -> bool:
+    stripped = text.strip().strip("?!. ,")
+    if stripped == "si":
+        return False
+
+    contextual_phrases = (
+        "esos cambios",
+        "ese cambio",
+        "lo que hablamos",
+        "esas opciones",
+        "esa opcion",
+        "como dijimos",
+        "los anteriores",
+        "valores anteriores",
+        "cambios anteriores",
+        "aplicalos",
+        "aplica eso",
+        "hazlo",
+        "haz esos",
+        "haz ese",
+    )
+    if any(phrase in stripped for phrase in contextual_phrases):
+        return bool(
+            _has_mutation_intent(stripped)
+            or stripped.startswith(("si ", "si,", "haz", "aplica", "usa"))
+            or "opciones" in stripped
+        )
+
+    return bool(
+        re.search(
+            r"\bsi\b.*\b(cambia|aplica|haz|usa)\b.*\b(sistemas|cambios|opciones|hablamos|dijimos)\b",
+            stripped,
+        )
+    )
+
+
+def _latest_contextual_system_change(request: ChatActionInterpretRequest) -> dict | None:
+    candidates = _contextual_system_change_candidates(request)
+    if not candidates:
+        return None
+
+    latest = candidates[0]
+    if latest["state"] == "AMBIGUOUS":
+        return latest
+
+    for previous in candidates[1:3]:
+        if previous["state"] == "AMBIGUOUS":
+            return previous
+        if _contextual_candidates_conflict(latest, previous):
+            return {
+                "state": "AMBIGUOUS",
+                "reason": "CONTEXTUAL_ACTION_CONFLICTING_CHANGE_SETS",
+            }
+
+    if _references_are_ambiguous_in_context(request.context, latest["target_references"]):
+        return {
+            "state": "AMBIGUOUS",
+            "reason": "CONTEXTUAL_TARGET_REFERENCE_AMBIGUOUS",
+        }
+
+    return latest
+
+
+def _contextual_system_change_candidates(
+    request: ChatActionInterpretRequest,
+) -> list[dict]:
+    current_message = _normalize_text(request.userMessage).strip()
+    candidates: list[dict] = []
+
+    for message in reversed(request.conversation):
+        if message.role != "user":
+            continue
+
+        normalized = _normalize_text(message.content).strip()
+        if normalized == current_message or _is_contextual_action_reference(normalized):
+            continue
+
+        assignments = _system_assignments(message.content)
+        if not assignments:
+            continue
+
+        values = {assignment["requested_value"].casefold() for assignment in assignments}
+        if len(values) > 1:
+            candidates.append(
+                {
+                    "state": "AMBIGUOUS",
+                    "reason": "CONTEXTUAL_HETEROGENEOUS_VALUES_UNSUPPORTED",
+                }
+            )
+            continue
+
+        target_references = _dedupe_references(
+            reference
+            for assignment in assignments
+            for reference in assignment["target_references"]
+        )
+        if not target_references:
+            continue
+
+        candidates.append(
+            {
+                "state": "VALID",
+                "target_references": target_references,
+                "requested_value": assignments[0]["requested_value"],
+            }
+        )
+
+    return candidates
+
+
+def _contextual_fallback_action_type(text: str) -> str:
+    return "CHANGE_SYSTEM" if any(
+        phrase in text
+        for phrase in ("sistema", "sistemas", "opcion", "opciones", "cambio", "cambios")
+    ) else "UNKNOWN"
+
+
+def _system_assignments(message: str) -> list[dict]:
+    normalized_message = _normalize_text(message)
+    if _has_dimension_intent(normalized_message) or _has_quantity_intent(normalized_message):
+        return []
+
+    reference = r"[A-Za-z]{1,4}\s*[-_ ]?\s*\d{1,3}[A-Za-z]?"
+    target_group = rf"{reference}(?:\s*(?:,|;|y|e)\s*{reference})*"
+    pattern = re.compile(
+        rf"(?P<targets>{target_group})\s+(?:a|en|con|por)\s+(?P<value>.+?)"
+        rf"(?=(?:\s*(?:,|;|y|e)\s*{reference}\s+(?:a|en|con|por)\s+)|$)",
+        re.IGNORECASE,
+    )
+    assignments: list[dict] = []
+    for match in pattern.finditer(message):
+        target_references = _target_references(match.group("targets"))
+        value = _clean_requested_value(match.group("value"))
+        if target_references and value:
+            assignments.append(
+                {
+                    "target_references": target_references,
+                    "requested_value": value,
+                }
+            )
+
+    if assignments:
+        return assignments
+
+    target_references = _target_references(message)
+    value = _system_value(message, _normalize_text(message))
+    if value is None and target_references and _has_mutation_intent(_normalize_text(message)):
+        fallback = re.search(r"\b(?:a|en|con|por)\s+(.+)$", message, flags=re.IGNORECASE)
+        if fallback:
+            value = _clean_requested_value(fallback.group(1))
+    if target_references and value:
+        return [{"target_references": target_references, "requested_value": value}]
+
+    return []
+
+
+def _contextual_candidates_conflict(current: dict, previous: dict) -> bool:
+    if current["state"] != "VALID" or previous["state"] != "VALID":
+        return False
+
+    current_targets = {_normalize_reference(value) for value in current["target_references"]}
+    previous_targets = {_normalize_reference(value) for value in previous["target_references"]}
+    if not current_targets.intersection(previous_targets):
+        return False
+
+    return current["requested_value"].casefold() != previous["requested_value"].casefold()
+
+
+def _references_are_ambiguous_in_context(context: object, references: list[str]) -> bool:
+    items = _context_items(context)
+    if not items:
+        return False
+
+    counts: dict[str, int] = {}
+    for item in items:
+        reference = item.get("reference") if isinstance(item, dict) else None
+        if isinstance(reference, str) and reference.strip():
+            normalized = _normalize_reference(reference)
+            counts[normalized] = counts.get(normalized, 0) + 1
+
+    return any(counts.get(_normalize_reference(reference), 0) > 1 for reference in references)
+
+
+def _context_items(context: object) -> list[dict]:
+    if not isinstance(context, dict):
+        return []
+
+    source = context.get("originalContext") if isinstance(context.get("originalContext"), dict) else context
+    proposal = source.get("technicalProposal") if isinstance(source, dict) else None
+    items = proposal.get("items") if isinstance(proposal, dict) else None
+    if isinstance(items, list):
+        return [item for item in items if isinstance(item, dict)]
+
+    item = source.get("item") if isinstance(source, dict) else None
+    return [item] if isinstance(item, dict) else []
+
+
 def _pending_action(request: ChatActionInterpretRequest) -> dict | None:
     context = request.context
     if not isinstance(context, dict):
@@ -349,6 +653,23 @@ def _pending_action_follow_up(
     )
     target_reference = _optional_str(pending_action.get("targetReference"))
     clarification_expected = pending_action.get("clarificationExpected")
+    message_target = _target_reference(message)
+
+    if "lo mismo" in text and message_target is not None:
+        requested_value = _optional_str(pending_action.get("requestedValue"))
+        if action_type in {"CHANGE_SYSTEM", "CHANGE_FINISH", "CHANGE_GLASS"} and requested_value is not None:
+            return _intent(
+                request,
+                action_type=action_type,
+                scope=scope,
+                target_reference=message_target,
+                target_references=[message_target],
+                requested_value=requested_value,
+                requested_attributes=_pending_requested_attributes(pending_action),
+                confidence=0.86,
+                classification_reason="PENDING_ACTION_COPY_TO_TARGET",
+                is_follow_up=True,
+            )
 
     if clarification_expected == "targetReference":
         resolved_target = _target_follow_up_reference(
@@ -671,40 +992,50 @@ def _scope(request: ChatActionInterpretRequest) -> str:
 
 
 def _target_reference(message: str) -> str | None:
-    match = _target_reference_match(message)
+    match = _target_reference_match(_strip_dimension_expressions(message))
     if not match:
         return None
     return _reference_from_match(match)
 
 
 def _target_references(message: str) -> list[str]:
+    cleaned = _strip_dimension_expressions(message)
     return _dedupe_references(
         reference
-        for match in re.finditer(
-            r"\b([A-Za-z]{1,4})\s*[-_ ]?\s*(\d{1,3})([A-Za-z]?)\b",
-            message,
-        )
+        for match in re.finditer(_TARGET_REFERENCE_PATTERN, cleaned)
         if (reference := _reference_from_match(match)) is not None
     )
 
 
 def _target_reference_match(message: str) -> re.Match[str] | None:
-    return re.search(
-        r"\b([A-Za-z]{1,4})\s*[-_ ]?\s*(\d{1,3})([A-Za-z]?)\b",
-        message,
-    )
+    return re.search(_TARGET_REFERENCE_PATTERN, message)
 
 
 def _reference_from_match(match: re.Match[str]) -> str | None:
     prefix = match.group(1).upper()
-    if prefix in {"DE", "K", "S"}:
+    if prefix not in _VALID_TARGET_PREFIXES:
         return None
-    suffix = match.group(3).lower()
-    return f"{prefix}-{match.group(2)}{suffix}"
+    separator = match.group(2)
+    if prefix not in {"V", "PV", "C"} and separator not in {"-", "_"}:
+        return None
+    suffix = match.group(4).lower()
+    return f"{prefix}-{match.group(3)}{suffix}"
 
 
 def _normalize_reference(value: str) -> str:
     return value.strip().casefold().replace("_", "-")
+
+
+def _strip_dimension_expressions(value: str) -> str:
+    number = r"\d+(?:[.,]\d+)?"
+    text = re.sub(
+        rf"\b{number}\s*(?:mm|cm|m)?\s*(?:x|por)\s*{number}\s*(?:mm|cm|m)?\b",
+        " ",
+        value,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(rf"\b(?:ancho|alto)\s*{number}\s*(?:mm|cm|m)?\b", " ", text)
+    return text
 
 
 def _dedupe_references(references: object) -> list[str]:
@@ -723,22 +1054,49 @@ def _dedupe_references(references: object) -> list[str]:
 
 def _normalize_text(value: str) -> str:
     text = value.casefold()
+    replacements = {
+        "ã¡": "a",
+        "ã©": "e",
+        "ã­": "i",
+        "ã³": "o",
+        "ãº": "u",
+        "ã±": "n",
+        "Ã¡": "a",
+        "Ã©": "e",
+        "Ã­": "i",
+        "Ã³": "o",
+        "Ãº": "u",
+        "Ã±": "n",
+    }
+    for source, target in replacements.items():
+        text = text.replace(source, target)
     text = "".join(
         char
         for char in unicodedata.normalize("NFD", text)
         if unicodedata.category(char) != "Mn"
     )
-    replacements = {
-        "á": "a",
-        "é": "e",
-        "í": "i",
-        "ó": "o",
-        "ú": "u",
-        "ñ": "n",
-    }
-    for source, target in replacements.items():
-        text = text.replace(source, target)
     return text
+
+
+def _has_confirm_selection_action_intent(text: str) -> bool:
+    stripped = text.strip().strip("?!. ,")
+    stripped = stripped.removeprefix("¿").removeprefix("¡").strip()
+    if any(
+        phrase in stripped
+        for phrase in (
+            "ya esta confirmada",
+            "esta confirmada",
+            "esta lista para confirmar",
+            "lista para confirmar",
+            "que falta para confirmar",
+            "que le falta para confirmar",
+            "que hace falta para confirmar",
+        )
+    ):
+        return False
+    if re.search(r"\b(confirma|confirmar|confirmas|confirmame)\b", stripped) is not None:
+        return "seleccion" in stripped or "propuesta" in stripped
+    return bool(re.search(r"\b(dejala|dejarla)\s+confirmada\b", stripped))
 
 
 def _is_informational(text: str) -> bool:
@@ -766,12 +1124,15 @@ def _has_mutation_intent(text: str) -> bool:
     return any(
         pattern.search(text)
         for pattern in (
-            re.compile(r"\b(cambia|cambialo|cambiar|modifica|reemplaza|actualiza)\b"),
-            re.compile(r"\b(pon|ponlo|ponle|usa|usar|ajusta|sube|baja)\b"),
+            re.compile(r"\b(cambia|cambias|cambialo|cambiar|modifica|reemplaza|actualiza)\b"),
+            re.compile(r"\b(pon|poner|ponlo|ponle|ponerle|usa|usar|ajusta|sube|baja|deja|dejale|dejalo)\b"),
             re.compile(r"\b(quita|quitalo|excluye|excluyelo|saca|sacalo|elimina)\b"),
             re.compile(r"\b(incluye|incluyelo|incluir|incluirlo|agrega|agregalo)\b"),
             re.compile(r"\bvuelve\s+a\s+incluir\b"),
             re.compile(r"\bno\s+cotices\b"),
+            re.compile(r"\bquiero\s+.+\s+en\s+"),
+            re.compile(r"\bme\s+cambias\b"),
+            re.compile(r"\bmejor\s+con\b"),
         )
     )
 
@@ -791,6 +1152,17 @@ def _has_generic_change_intent(text: str) -> bool:
     )
 
 
+def _has_copy_configuration_intent(text: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(copia|copiar|duplica|duplicar)\b.*\b(configuracion|config)\b"
+            r"|\bcopia\s+[a-z]+\s*[-_ ]?\s*\d{1,3}[a-z]?\s+(?:en|a)\s+[a-z]+\s*[-_ ]?\s*\d{1,3}[a-z]?\b"
+            r"|\bhaz\s+que\s+[a-z]+\s*[-_ ]?\s*\d{1,3}[a-z]?\s+quede\s+igual\s+que\s+[a-z]+\s*[-_ ]?\s*\d{1,3}[a-z]?\b",
+            text,
+        )
+    )
+
+
 def _has_system_intent(text: str) -> bool:
     return (
         "sistema" in text
@@ -803,15 +1175,23 @@ def _has_system_intent(text: str) -> bool:
 
 
 def _system_value(message: str, text: str) -> str | None:
-    match = re.search(
-        r"\b(?:cambia|cambialo|cambiar|modifica|reemplaza|actualiza|pon|ponlo|usa)"
-        r"\b(?:\s+(?:este|esta|un|una|item|elemento|[A-Za-z]{1,4}\s*[-_ ]?\s*\d{1,3}))*"
+    if _has_dimension_intent(text) or _has_quantity_intent(text):
+        return None
+    patterns = [
+        r"\b(?:pon|ponlo|ponle|cambia|cambialo|cambiar|usa)\s+[A-Za-z]{1,4}\s*[-_ ]?\s*\d{1,3}[A-Za-z]?(?:\s*(?:,|;|y|e)\s*[A-Za-z]{1,4}\s*[-_ ]?\s*\d{1,3}[A-Za-z]?)+\s+(?:a|en|con)\s+(.+)$",
+        r"\bme\s+cambias\s+[A-Za-z]{1,4}\s*[-_ ]?\s*\d{1,3}[A-Za-z]?\s+(?:a|por|con|en)\s+(.+?)[?!.]*$",
+        r"\b(?:cambia|cambias|cambialo|cambiar|modifica|reemplaza|actualiza|pon|ponlo|ponle|usa)"
+        r"\b(?:\s+(?:este|esta|un|una|item|elemento|[A-Za-z]{1,4}\s*[-_ ]?\s*\d{1,3}[A-Za-z]?))*"
         r"\s+(?:a|por|con|en)\s+(.+)$",
-        message,
-        flags=re.IGNORECASE,
-    )
-    if match:
-        return _clean_requested_value(match.group(1))
+        r"\b(?:pon|ponlo|ponle|quiero)\s+(.+?)\s+(?:a|en|para)\s+[A-Za-z]{1,4}\s*[-_ ]?\s*\d{1,3}[A-Za-z]?\b",
+        r"\b[A-Za-z]{1,4}\s*[-_ ]?\s*\d{1,3}[A-Za-z]?\s+(?:dejale|dejalo|deja|ponle|ponlo)\s+(?:el\s+sistema\s+)?(.+)$",
+        r"\b[A-Za-z]{1,4}\s*[-_ ]?\s*\d{1,3}[A-Za-z]?\s+y\s+[A-Za-z]{1,4}\s*[-_ ]?\s*\d{1,3}[A-Za-z]?\s+(?:a|en|con)\s+(.+)$",
+        r"\bmejor\s+con\s+(.+)$",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, message, flags=re.IGNORECASE)
+        if match:
+            return _clean_requested_value(match.group(1))
     match = re.search(
         r"\b(?:pon|ponlo|usa)\s+((?:(?:un|una)\s+)?"
         r"(?:puerta|ventana|fijo|sistema)\b.+)$",
@@ -834,7 +1214,7 @@ def _system_code_match(text: str) -> re.Match[str] | None:
 
 
 def _has_glass_intent(text: str) -> bool:
-    return any(
+    return _glass_code_match(text) is not None or any(
         word in text
         for word in (
             "vidrio",
@@ -850,6 +1230,9 @@ def _has_glass_intent(text: str) -> bool:
 
 
 def _glass_value(message: str, text: str) -> str | None:
+    code = _glass_code_match(message)
+    if code:
+        return code.group(0).upper()
     if not _has_glass_intent(text):
         return None
     if "templado" in text or "laminado" in text:
@@ -859,15 +1242,15 @@ def _glass_value(message: str, text: str) -> str | None:
             re.IGNORECASE,
         )
         if match:
-            return _clean_requested_value(match.group(0))
+            return _clean_requested_value(_strip_trailing_target_clause(match.group(0)))
     if _glass_family(text) is not None:
         match = re.search(
-            r"\b(?:vidrio|cristal|monolitico|monolítico|laminado|doble vidrio|dvh|igu)\b.*$",
+            r"\b(?:vidrio|cristal|monolitico|monolÃ­tico|laminado|doble vidrio|dvh|igu)\b.*$",
             message,
             re.IGNORECASE,
         )
         if match:
-            return _clean_requested_value(match.group(0))
+            return _clean_requested_value(_strip_trailing_target_clause(match.group(0)))
     thickness = re.search(r"\b(\d+(?:[.,]\d+)?)\s*mm\b", message, re.IGNORECASE)
     if thickness:
         return f"{thickness.group(1).replace(',', '.')} mm"
@@ -880,8 +1263,12 @@ def _glass_value(message: str, text: str) -> str | None:
         re.IGNORECASE,
     )
     if match:
-        return match.group(0).strip()
+        return _strip_trailing_target_clause(match.group(0)).strip()
     return None
+
+
+def _glass_code_match(text: str) -> re.Match[str] | None:
+    return re.search(_GLASS_CODE_PATTERN, text)
 
 
 def _has_finish_intent(text: str) -> bool:
@@ -898,34 +1285,57 @@ def _finish_value(message: str, text: str) -> str | None:
     if match:
         value = _strip_trailing_target_clause(match.group(1))
         return value if value else None
-    for word in ("inox", "negro mate", "negro", "blanco", "gris", "champaña", "champana"):
+    for word in ("inox", "negro mate", "negro", "blanco", "gris", "champaÃ±a", "champana"):
         if word in text:
             return _slice_original(message, word) or word
     return None
 
 
 def _has_quantity_intent(text: str) -> bool:
-    return any(word in text for word in ("cantidad", "unidades", "unidad", "estos"))
+    return any(word in text for word in ("cantidad", "unidades", "unidad", "estos")) or bool(
+        re.search(r"\bdejalo\s+en\s+\d+\b", text)
+    )
 
 
 def _quantity(text: str) -> int | None:
-    match = re.search(r"\b(\d+)\s*(?:unidades|unidad|und|de estos)?\b", text)
-    if not match:
-        return None
-    value = int(match.group(1))
-    return value if value > 0 else None
+    cleaned = _strip_target_references(text)
+    match = re.search(r"\b(?:cantidad\s*(?:a|en|para)?\s*)?(\d+)\s*(?:unidades|unidad|und|de estos)?\b", cleaned)
+    if match:
+        value = int(match.group(1))
+        return value if value > 0 else None
+    word_match = re.search(
+        r"\b(?:cantidad\s*(?:a|en|para)?\s*)?(" + "|".join(_NUMBER_WORDS) + r")\s*(?:unidades|unidad|und|de estos)?\b",
+        cleaned,
+    )
+    if word_match:
+        return _NUMBER_WORDS[word_match.group(1)]
+    return None
 
 
 def _standalone_positive_int(text: str) -> int | None:
     match = re.fullmatch(r"\s*(?:que\s+sean\s+)?(\d+)\s*(?:unidades|unidad|und)?\s*", text)
-    if not match:
-        return None
-    value = int(match.group(1))
-    return value if value > 0 else None
+    if match:
+        value = int(match.group(1))
+        return value if value > 0 else None
+    word_match = re.fullmatch(
+        r"\s*(?:que\s+sean\s+)?(" + "|".join(_NUMBER_WORDS) + r")\s*(?:unidades|unidad|und)?\s*",
+        text,
+    )
+    return _NUMBER_WORDS[word_match.group(1)] if word_match else None
 
 
 def _has_dimension_intent(text: str) -> bool:
-    return any(word in text for word in (" x ", " por ", "ancho", "alto", "medida", "dimens"))
+    return (
+        any(word in text for word in (" x ", "ancho", "alto", "medida", "dimens"))
+        or re.search(r"\d+(?:[.,]\d+)?\s*(?:mm|cm|m)?\s+por\s+\d", text) is not None
+    )
+
+
+def _strip_target_references(value: str) -> str:
+    def replace_if_valid(match: re.Match[str]) -> str:
+        return " " if _reference_from_match(match) is not None else match.group(0)
+
+    return re.sub(_TARGET_REFERENCE_PATTERN, replace_if_valid, value)
 
 
 def _dimensions_mm(text: str) -> tuple[int, int] | None:
@@ -953,6 +1363,23 @@ def _dimensions_mm(text: str) -> tuple[int, int] | None:
         _to_mm(match.group(1), first_unit),
         _to_mm(match.group(3), second_unit),
     )
+
+
+def _partial_dimension_mm(text: str) -> tuple[int | None, int | None] | None:
+    number = r"(\d+(?:[.,]\d+)?)"
+    match = re.search(rf"ancho\s*{number}\s*(mm|cm|m)?", text)
+    if match:
+        return (_to_mm(match.group(1), match.group(2) or _default_unit(match.group(1))), None)
+    match = re.search(rf"{number}\s*(mm|cm|m)?\s+de\s+ancho", text)
+    if match:
+        return (_to_mm(match.group(1), match.group(2) or _default_unit(match.group(1))), None)
+    match = re.search(rf"alto\s*{number}\s*(mm|cm|m)?", text)
+    if match:
+        return (None, _to_mm(match.group(1), match.group(2) or _default_unit(match.group(1))))
+    match = re.search(rf"{number}\s*(mm|cm|m)?\s+de\s+alto", text)
+    if match:
+        return (None, _to_mm(match.group(1), match.group(2) or _default_unit(match.group(1))))
+    return None
 
 
 def _to_mm(value: str, unit: str) -> int:
@@ -1022,7 +1449,7 @@ def _strip_trailing_target_clause(value: str) -> str:
     return re.sub(
         r"\s+en\s+[A-Za-z]{1,4}\s*[-_ ]?\s*\d{1,3}[A-Za-z]?"
         r"(?:\s*(?:,|;|/|y|e|ademas|tambien)\s*"
-        r"[A-Za-z]{1,4}\s*[-_ ]?\s*\d{1,3}[A-Za-z]?)*\s*$",
+        r"[A-Za-z]{1,4}\s*[-_ ]?\s*\d{1,3}[A-Za-z]?)*\s*[?.!,;:]*\s*$",
         "",
         value,
         flags=re.IGNORECASE,
@@ -1201,8 +1628,14 @@ def _glass_attributes(
     normalized_context = _normalize_text(f"{requested_value} {text}")
     family = _glass_family(normalized_context)
     composition = None
-    if "templado" in normalized_value or "templado" in text:
+    glass_code = _glass_code_match(normalized_value)
+    if glass_code and normalized_value.startswith("temp_"):
         composition = "TEMPERED"
+    elif "templado" in normalized_value or "templado" in text:
+        composition = "TEMPERED"
+    elif glass_code and normalized_value.startswith("lam_"):
+        composition = "LAMINATED"
+        family = family or "LAMINATED"
     elif family == "LAMINATED" or "laminado" in normalized_value or "laminado" in text:
         composition = "LAMINATED"
 
@@ -1211,7 +1644,9 @@ def _glass_attributes(
     chamber_thickness = None
     composition_match = re.search(
         r"\b(\d+(?:[.,]\d+)?)\s*\+\s*(\d+(?:[.,]\d+)?)\b",
-        requested_value,
+        requested_value.replace("_", "+")
+        if normalized_value.startswith("lam_")
+        else requested_value,
     )
     if composition_match:
         outer_thickness = _number_value(composition_match.group(1))

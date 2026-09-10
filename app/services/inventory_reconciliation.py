@@ -23,6 +23,7 @@ CONTEXT_LABEL_NOT_IDENTITY_REASON = "INVENTORY_CONTEXT_LABEL_NOT_IDENTITY"
 INSUFFICIENT_IDENTITY_REASON = "INVENTORY_INSUFFICIENT_IDENTITY_EVIDENCE"
 DIFFERENT_CONTEXT_REASON = "INVENTORY_REFERENCE_CONTEXT_DISTINCT"
 SAME_CONTEXT_REASON = "INVENTORY_REFERENCE_SAME_CONTEXT_MERGED"
+CONTEXT_INCOMPLETE_REASON = "INVENTORY_REFERENCE_CONTEXT_INCOMPLETE_REQUIRES_REVIEW"
 PROFILE_EXPLICIT_CONFLICT = "PROFILE_EXPLICIT_CONFLICT"
 GLASS_EXPLICIT_CONFLICT = "GLASS_EXPLICIT_CONFLICT"
 GLASS_SCOPE_ITEM_LOCAL = "ITEM_LOCAL"
@@ -135,6 +136,33 @@ def reconcile_inventory_candidates(
 
     for canonical, items in groups.items():
         for context, context_items in _group_by_commercial_context(items):
+            if context is None and len(context_items) > 1:
+                distinct_items = _split_ambiguous_duplicate_reference(
+                    context_items, canonical
+                )
+                if distinct_items is not None:
+                    for item in distinct_items:
+                        kept.append(item)
+                        warnings.extend(_resolution_warnings(item, canonical))
+                        decisions.append(
+                            InventoryDecision(
+                                "KEEP",
+                                CONTEXT_INCOMPLETE_REASON,
+                                (item.temporary_id,),
+                                item.reference,
+                                normalized_reference=canonical,
+                                commercial_context=_canonical_commercial_context(item),
+                                reference_semantics=FORMAL_REFERENCE,
+                                winner_temporary_id=item.temporary_id,
+                                candidates=(_candidate_snapshot(item),),
+                            )
+                        )
+                    warnings.append(
+                        f"{CONTEXT_INCOMPLETE_REASON}: preserved "
+                        f"{len(distinct_items)} candidates for {canonical} because "
+                        "duplicate identity was ambiguous."
+                    )
+                    continue
             if len(context_items) == 1:
                 item = _resolve_item_preference(context_items[0])
                 kept.append(item)
@@ -189,6 +217,77 @@ def reconcile_inventory_candidates(
     )
     return result, decisions
 
+
+
+def _split_ambiguous_duplicate_reference(
+    items: list[GeminiElementEnrichment],
+    canonical: str,
+) -> list[GeminiElementEnrichment] | None:
+    contexts = [_canonical_commercial_context(item) for item in items]
+    has_context = any(context is not None for context in contexts)
+    has_missing_context = any(context is None for context in contexts)
+    complete_dimensions = [item for item in items if _has_complete_dimensions(item)]
+    has_distinct_physical_signature = len(
+        {_physical_identity_signature(item) for item in complete_dimensions}
+    ) > 1
+    all_missing_contexts = not has_context and has_missing_context
+    mixed_contexts = has_context and has_missing_context
+    physically_distinct_inventory_rows = (
+        (mixed_contexts and len(complete_dimensions) == len(items))
+        or (all_missing_contexts and len(complete_dimensions) == len(items))
+    )
+
+    if not physically_distinct_inventory_rows or not has_distinct_physical_signature:
+        return None
+
+    resolved: list[GeminiElementEnrichment] = []
+    for item in items:
+        updated = item.model_copy(deep=True)
+        updated.reference = canonical
+        if _canonical_commercial_context(updated) is None:
+            updated.status = ExtractionStatus.AMBIGUOUS
+            if CONTEXT_INCOMPLETE_REASON not in updated.missing_or_unknown:
+                updated.missing_or_unknown.append(CONTEXT_INCOMPLETE_REASON)
+        resolved.append(_resolve_item_preference(updated))
+
+    return resolved
+
+
+
+def _has_complete_dimensions(item: GeminiElementEnrichment) -> bool:
+    types = {
+        _normalized_text(measurement.type)
+        for measurement in item.measurements
+        if measurement.value is not None or _text(measurement.text)
+    }
+    return "width" in types and "height" in types
+
+def _physical_identity_signature(item: GeminiElementEnrichment) -> tuple[object, ...]:
+    dimensions = tuple(
+        (
+            _normalized_text(measurement.type),
+            measurement.value,
+            _normalized_text(measurement.unit),
+            _normalized_text(measurement.text),
+        )
+        for measurement in item.measurements
+        if measurement.value is not None or _text(measurement.text)
+    )
+    return (
+        dimensions,
+        item.panel_count,
+        item.movable_panel_count,
+        item.fixed_panel_count,
+        _normalized_text(item.geometry_type_raw),
+        _normalized_text(item.geometry_raw),
+    )
+
+
+
+def _normalized_text(value: str | None) -> str | None:
+    if not _text(value):
+        return None
+    return value.strip().casefold()
 
 def _is_orphan_reference(element: GeminiElementEnrichment) -> bool:
     if not _text(element.reference):

@@ -34,6 +34,7 @@ from app.services.gemini_extraction_mapper import (
 from app.services.inventory_reconciliation import (
     CONTEXT_LABEL,
     CONTEXT_LABEL_NOT_IDENTITY_REASON,
+    CONTEXT_INCOMPLETE_REASON,
     DIFFERENT_CONTEXT_REASON,
     DUPLICATE_REFERENCE_REASON,
     GLASS_EXPLICIT_CONFLICT,
@@ -3192,6 +3193,250 @@ def test_item_count_diagnostics_preserves_casa_pereira_nineteen_to_nineteen_regr
     assert report.stage_counts.post_reconciliation == 19
 
 
+
+
+def test_discovery_context_is_propagated_when_enrichment_omits_it() -> None:
+    discovery = GeminiDiscoveryResult(
+        elements=[
+            GeminiElementDiscovery(
+                temporary_id="pv-01-level-a",
+                reference="PV-01",
+                occurrence_context="LEVEL A",
+            )
+        ]
+    )
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="pv-01-level-a",
+                reference="PV-01",
+                measurements=[GeminiEnrichmentMeasurement(type="width", value=5.25, unit="m")],
+            )
+        ]
+    )
+
+    merged = merge_enrichment_batches(discovery, [enrichment])
+
+    assert merged.elements[0].occurrence_context == "LEVEL A"
+
+
+def test_discovery_context_conflict_marks_enrichment_ambiguous() -> None:
+    discovery = GeminiDiscoveryResult(
+        elements=[
+            GeminiElementDiscovery(
+                temporary_id="pv-01-level-a",
+                reference="PV-01",
+                occurrence_context="LEVEL A",
+            )
+        ]
+    )
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="pv-01-level-a",
+                reference="PV-01",
+                occurrence_context="LEVEL B",
+            )
+        ]
+    )
+
+    merged = merge_enrichment_batches(discovery, [enrichment])
+
+    assert merged.elements[0].occurrence_context == "LEVEL B"
+    assert merged.elements[0].status == ExtractionStatus.AMBIGUOUS
+    assert "occurrence_context_conflict" in merged.elements[0].missing_or_unknown
+    assert any("occurrence_context_conflict" in warning for warning in merged.warnings)
+
+
+def test_repeated_formal_reference_with_distinct_contexts_survives_final_extraction() -> None:
+    discovery = GeminiDiscoveryResult(
+        elements=[
+            GeminiElementDiscovery(temporary_id="pv-a", reference="PV-01", occurrence_context="LEVEL A"),
+            GeminiElementDiscovery(temporary_id="pv-b", reference="PV-01", occurrence_context="LEVEL B"),
+            GeminiElementDiscovery(temporary_id="pv-c", reference="PV-01", occurrence_context="LEVEL C"),
+        ]
+    )
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="pv-a",
+                reference="PV-01",
+                occurrence_context="LEVEL A",
+                functional_type_raw="SLIDING_DOOR",
+                operation_raw="SLIDING",
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=5.25, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=2.50, unit="m"),
+                ],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="pv-b",
+                reference="PV-01",
+                occurrence_context="LEVEL B",
+                functional_type_raw="SLIDING_DOOR",
+                operation_raw="SLIDING",
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=4.10, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=2.50, unit="m"),
+                ],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="pv-c",
+                reference="PV-01",
+                occurrence_context="LEVEL C",
+                functional_type_raw="SLIDING_DOOR",
+                operation_raw="SLIDING",
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=2.60, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=2.50, unit="m"),
+                ],
+            ),
+        ]
+    )
+
+    extraction = enrichment_to_gemini_extraction(discovery, enrichment)
+
+    assert [element.id for element in extraction.elements] == ["pv-a", "pv-b", "pv-c"]
+    assert [element.reference for element in extraction.elements] == ["PV-01", "PV-01", "PV-01"]
+    assert [element.occurrences[0].location for element in extraction.elements] == [
+        "LEVEL A",
+        "LEVEL B",
+        "LEVEL C",
+    ]
+
+
+def test_repeated_reference_with_missing_context_and_distinct_dimensions_does_not_merge() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="pv-a",
+                reference="PV-01",
+                occurrence_context="LEVEL A",
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=5.25, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=2.50, unit="m"),
+                ],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="pv-unknown",
+                reference="PV-01",
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=4.10, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=2.50, unit="m"),
+                ],
+            ),
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+
+    assert [element.temporary_id for element in result.elements] == ["pv-a", "pv-unknown"]
+    assert result.elements[1].status == ExtractionStatus.AMBIGUOUS
+    assert CONTEXT_INCOMPLETE_REASON in result.elements[1].missing_or_unknown
+    assert [decision.action for decision in decisions] == ["KEEP", "KEEP"]
+    assert {decision.reason for decision in decisions} == {CONTEXT_INCOMPLETE_REASON}
+
+
+def test_v_like_duplicate_with_different_operation_and_context_stays_separate() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="v-level-1",
+                reference="V-04",
+                occurrence_context="NIVEL 1",
+                functional_type_raw="SLIDING_WINDOW",
+                operation_raw="SLIDING",
+                measurements=[GeminiEnrichmentMeasurement(type="width", value=1.20, unit="m")],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="v-level-2",
+                reference="V-04",
+                occurrence_context="NIVEL 2",
+                functional_type_raw="WINDOW",
+                operation_raw="SWING",
+                measurements=[GeminiEnrichmentMeasurement(type="width", value=0.90, unit="m")],
+            ),
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+
+    assert [element.temporary_id for element in result.elements] == ["v-level-1", "v-level-2"]
+    assert [element.operation_raw for element in result.elements] == ["SLIDING", "SWING"]
+    assert all(decision.action == "KEEP" for decision in decisions)
+
+
+def test_casa_pereira_repeated_references_keep_context_identity_regression() -> None:
+    enrichment = GeminiEnrichmentResult(
+        elements=[
+            GeminiElementEnrichment(
+                temporary_id="sotano-pv-01",
+                reference="PV-01",
+                occurrence_context="SOTANO",
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=5.25, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=2.50, unit="m"),
+                ],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="nivel-1-pv-01",
+                reference="PV-01",
+                occurrence_context="NIVEL 1",
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=4.10, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=2.50, unit="m"),
+                ],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="nivel-2-pv-01",
+                reference="PV-01",
+                occurrence_context="NIVEL 2",
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=2.60, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=2.50, unit="m"),
+                ],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="nivel-1-v-04",
+                reference="V-04",
+                occurrence_context="NIVEL 1",
+                operation_raw="SLIDING",
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=1.20, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=1.65, unit="m"),
+                ],
+            ),
+            GeminiElementEnrichment(
+                temporary_id="nivel-2-v-04",
+                reference="V-04",
+                occurrence_context="NIVEL 2",
+                operation_raw="SWING",
+                measurements=[
+                    GeminiEnrichmentMeasurement(type="width", value=0.90, unit="m"),
+                    GeminiEnrichmentMeasurement(type="height", value=2.50, unit="m"),
+                ],
+            ),
+        ]
+    )
+
+    result, decisions = reconcile_inventory_candidates(enrichment)
+
+    assert len(result.elements) == 5
+    assert [element.temporary_id for element in result.elements] == [
+        "sotano-pv-01",
+        "nivel-1-pv-01",
+        "nivel-2-pv-01",
+        "nivel-1-v-04",
+        "nivel-2-v-04",
+    ]
+    assert [element.occurrence_context for element in result.elements] == [
+        "SOTANO",
+        "NIVEL 1",
+        "NIVEL 2",
+        "NIVEL 1",
+        "NIVEL 2",
+    ]
+    assert all(decision.action == "KEEP" for decision in decisions)
 
 
 def _glass_element(

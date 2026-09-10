@@ -7,6 +7,43 @@ from app.models.chat_actions import ChatActionInterpretRequest
 from app.services.chat_action_interpreter import ChatActionInterpreter
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Confirma la seleccion",
+        "Confirma esta propuesta",
+        "Quiero confirmar la propuesta",
+        "Dejala confirmada",
+        "Puedes confirmar la seleccion?",
+        "Me confirmas la propuesta?",
+    ],
+)
+def test_interprets_confirm_selection_as_proposal_action(message: str) -> None:
+    intent = _interpret(message, scope="ITEM")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CONFIRM_SELECTION"
+    assert intent.scope == "REQUIREMENT"
+    assert intent.targetReference is None
+    assert intent.targetReferences == []
+    assert intent.classificationReason == "CONFIRM_SELECTION_MUTATION"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "La propuesta ya esta confirmada?",
+        "Esta lista para confirmar?",
+        "Que falta para confirmar?",
+    ],
+)
+def test_confirmation_status_questions_remain_read_only(message: str) -> None:
+    intent = _interpret(message)
+
+    assert intent.isAction is False
+    assert intent.actionType == "UNKNOWN"
+    assert intent.classificationReason == "INFORMATIONAL_GUARD"
+
 def test_interprets_change_system_with_reference() -> None:
     intent = _interpret("cambia V-9 a S50")
 
@@ -56,6 +93,195 @@ def test_natural_system_informational_messages_are_not_actions(message: str) -> 
     assert intent.isAction is False
     assert intent.actionType == "UNKNOWN"
 
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Cambia V-4 a Monza",
+        "Ponle Monza a V-4",
+        "Quiero Monza en V-4",
+        "A V-4 dejale el sistema Monza",
+        "Ese V-4 mejor con Monza",
+        "Me cambias V-4 por Monza?",
+    ],
+)
+def test_interprets_natural_system_phrasing_with_target(message: str) -> None:
+    intent = _interpret(message)
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.targetReference == "V-4"
+    assert intent.targetReferences == ["V-4"]
+    assert intent.requestedValue == "Monza"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Que sistema tiene V-4?",
+        "Monza seria compatible con V-4?",
+        "Que opciones tengo para V-4?",
+    ],
+)
+def test_natural_read_only_system_queries_do_not_mutate(message: str) -> None:
+    intent = _interpret(message)
+
+    assert intent.isAction is False
+    assert intent.actionType == "UNKNOWN"
+    assert intent.targetReference == "V-4"
+    assert intent.classificationReason == "INFORMATIONAL_GUARD"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Pon 2 unidades en V-4",
+        "Deja dos unidades en V-4",
+        "Cantidad 2 para V-4",
+        "V-4 dejalo en 2",
+    ],
+)
+def test_interprets_natural_quantity_without_reference_number_leak(message: str) -> None:
+    intent = _interpret(message)
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_QUANTITY"
+    assert intent.targetReference == "V-4"
+    assert intent.targetReferences == ["V-4"]
+    assert intent.requestedQuantity == 2
+
+
+def test_interprets_dimensions_without_false_targets() -> None:
+    intent = _interpret("cambia V-4 a 1.8 x 2.4")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_DIMENSIONS"
+    assert intent.targetReference == "V-4"
+    assert intent.targetReferences == ["V-4"]
+    assert intent.requestedWidthMm == 1800
+    assert intent.requestedHeightMm == 2400
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Pon 2 unidades en V-4",
+        "cambia V-4 a 1.8 x 2.4",
+    ],
+)
+def test_does_not_extract_false_targets_from_commands_or_dimensions(message: str) -> None:
+    intent = _interpret(message)
+
+    assert "PON-2" not in intent.targetReferences
+    assert "A-1" not in intent.targetReferences
+    assert "X-2" not in intent.targetReferences
+
+
+def test_partial_dimension_requires_clarification_instead_of_system_change() -> None:
+    intent = _interpret("dejalo en 1800 mm de ancho", scope="ITEM")
+
+    assert intent.isAction is False
+    assert intent.actionType == "CHANGE_DIMENSIONS"
+    assert intent.requestedWidthMm == 1800
+    assert intent.requestedHeightMm is None
+    assert intent.requiresClarification is True
+    assert intent.classificationReason == "PARTIAL_DIMENSION_MUTATION"
+
+
+@pytest.mark.parametrize("target", ["A-01", "TAG-01", "HOJA-02"])
+def test_interprets_supported_alphanumeric_target_prefixes(target: str) -> None:
+    intent = _interpret(f"Cambia {target} a Monza")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.targetReference == target
+    assert intent.targetReferences == [target]
+    assert intent.requestedValue == "Monza"
+
+
+def test_interprets_homogeneous_system_batch_with_shared_value() -> None:
+    intent = _interpret("Pon V-4 y V-5 en Monza")
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.targetReference == "V-4"
+    assert intent.targetReferences == ["V-4", "V-5"]
+    assert intent.requestedValue == "Monza"
+
+@pytest.mark.parametrize(
+    ("message", "expected_value"),
+    [
+        ("Pon TEMP_5 en V-4", "TEMP_5"),
+        ("Cambia V-4 a TEMP_5", "TEMP_5"),
+        ("Dejale TEMP_6 a V-4", "TEMP_6"),
+    ],
+)
+def test_interprets_glass_codes_before_system(message: str, expected_value: str) -> None:
+    intent = _interpret(message)
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_GLASS"
+    assert intent.targetReference == "V-4"
+    assert intent.targetReferences == ["V-4"]
+    assert intent.requestedValue == expected_value
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_value"),
+    [
+        ("Me puedes poner templado 5 en V-4?", "templado 5"),
+        ("Me cambias el vidrio de V-4 a templado 5?", "templado 5"),
+        ("Puedes ponerle TEMP_5 a V-4?", "TEMP_5"),
+    ],
+)
+def test_interprets_action_questions_for_glass_as_mutations(
+    message: str,
+    expected_value: str,
+) -> None:
+    intent = _interpret(message)
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_GLASS"
+    assert intent.targetReference == "V-4"
+    assert intent.targetReferences == ["V-4"]
+    assert intent.requestedValue == expected_value
+    assert intent.requiresClarification is False
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Templado 5 esta bien para V-4?",
+        "Templado 5 seria compatible con V-4?",
+        "Que vidrio tiene V-4?",
+    ],
+)
+def test_glass_read_only_questions_do_not_mutate(message: str) -> None:
+    intent = _interpret(message)
+
+    assert intent.isAction is False
+    assert intent.actionType == "UNKNOWN"
+    assert intent.classificationReason == "INFORMATIONAL_GUARD"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Copia la configuracion de V-4 a V-5",
+        "Copia V-4 en V-5",
+        "Duplica la configuracion de V-4 a V-5",
+        "Haz que V-5 quede igual que V-4",
+    ],
+)
+def test_copy_configuration_fails_safe_without_supported_action(message: str) -> None:
+    intent = _interpret(message)
+
+    assert intent.isAction is False
+    assert intent.actionType == "UNKNOWN"
+    assert intent.targetReferences == ["V-4", "V-5"] or intent.targetReferences == ["V-5", "V-4"]
+    assert intent.requiresClarification is True
+    assert intent.classificationReason == "COPY_CONFIGURATION_UNSUPPORTED"
+    assert "Copiar configuracion" in (intent.clarificationReason or "")
 
 def test_change_reference_without_system_value_requires_clarification() -> None:
     intent = _interpret("cambia V-01", scope="ITEM")
@@ -268,7 +494,7 @@ def test_interprets_tempered_black_glass_attributes() -> None:
 
 
 def test_interprets_monolithic_tempered_glass_attributes() -> None:
-    intent = _interpret("Cambia a vidrio monolítico templado de 6 mm", scope="ITEM")
+    intent = _interpret("Cambia a vidrio monolÃ­tico templado de 6 mm", scope="ITEM")
 
     assert intent.isAction is True
     assert intent.actionType == "CHANGE_GLASS"
@@ -306,7 +532,7 @@ def test_interprets_laminated_tempered_family_and_composition() -> None:
 
 
 def test_interprets_igu_family_and_chamber_thickness() -> None:
-    intent = _interpret("Pon doble vidrio con cámara de 12 mm", scope="ITEM")
+    intent = _interpret("Pon doble vidrio con cÃ¡mara de 12 mm", scope="ITEM")
 
     assert intent.isAction is True
     assert intent.actionType == "CHANGE_GLASS"
@@ -409,7 +635,7 @@ def test_glass_informational_message_is_not_action() -> None:
 
 
 def test_glass_family_informational_message_is_not_action() -> None:
-    intent = _interpret("Qué diferencia hay entre monolítico y laminado?", scope="ITEM")
+    intent = _interpret("QuÃ© diferencia hay entre monolÃ­tico y laminado?", scope="ITEM")
 
     assert intent.isAction is False
     assert intent.actionType == "UNKNOWN"
@@ -454,7 +680,7 @@ def test_informational_queries_are_not_actions(message: str) -> None:
 
 
 def test_multi_target_informational_query_is_not_action() -> None:
-    intent = _interpret("¿Qué sistema tienen V-9 y V-10?", scope="ITEM")
+    intent = _interpret("Â¿QuÃ© sistema tienen V-9 y V-10?", scope="ITEM")
 
     assert intent.isAction is False
     assert intent.actionType == "UNKNOWN"
@@ -519,6 +745,25 @@ def test_mixed_informational_and_mutation_keeps_explicit_action() -> None:
     assert intent.actionType == "CHANGE_SYSTEM"
     assert intent.targetReference == "V-9"
     assert intent.requestedValue == "S50"
+
+
+def test_pending_action_copy_same_change_to_explicit_target() -> None:
+    intent = _interpret(
+        "Ahora haz lo mismo con V-4",
+        context=_pending_context(
+            action_type="CHANGE_SYSTEM",
+            target_reference="V-3",
+            requested_value="Siena",
+        ),
+    )
+
+    assert intent.isAction is True
+    assert intent.isFollowUpToPendingAction is True
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.targetReference == "V-4"
+    assert intent.targetReferences == ["V-4"]
+    assert intent.requestedValue == "Siena"
+    assert intent.classificationReason == "PENDING_ACTION_COPY_TO_TARGET"
 
 
 def test_pending_system_requested_value_follow_up_completes_action() -> None:
@@ -596,7 +841,7 @@ def test_pending_glass_follow_up_populates_attributes() -> None:
 
 def test_pending_glass_follow_up_enriches_family_without_losing_attributes() -> None:
     intent = _interpret(
-        "monolítico",
+        "monolÃ­tico",
         context=_pending_context(
             action_type="CHANGE_GLASS",
             target_reference="PV-1",
@@ -612,7 +857,7 @@ def test_pending_glass_follow_up_enriches_family_without_losing_attributes() -> 
 
     assert intent.isAction is True
     assert intent.actionType == "CHANGE_GLASS"
-    assert intent.requestedValue == "monolítico"
+    assert intent.requestedValue == "monolÃ­tico"
     assert intent.requestedAttributes is not None
     assert intent.requestedAttributes.glass is not None
     assert intent.requestedAttributes.glass.family == "MONOLITHIC"
@@ -969,6 +1214,123 @@ def test_chat_action_endpoint_uses_dependency_override() -> None:
     assert response.json()["requestedQuantity"] == 3
 
 
+def test_contextual_homogeneous_system_change_uses_previous_user_message() -> None:
+    intent = _interpret_with_conversation(
+        "haz esos cambios",
+        [
+            {"role": "user", "content": "Pon V-01 y V-02 en MONACO"},
+            {"role": "assistant", "content": "Entendi que quieres V-01 y V-02 en MONACO."},
+        ],
+    )
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.scope == "REQUIREMENT"
+    assert intent.targetReference == "V-01"
+    assert intent.targetReferences == ["V-01", "V-02"]
+    assert intent.requestedValue == "MONACO"
+    assert intent.requiresClarification is False
+    assert intent.classificationReason == "CONTEXTUAL_SYSTEM_CHANGE_RESOLVED"
+
+
+def test_contextual_system_change_with_verbal_confirmation_materializes() -> None:
+    intent = _interpret_with_conversation(
+        "si, cambia los sistemas",
+        [
+            {"role": "user", "content": "Pon V-01 y V-02 en MONACO"},
+            {"role": "assistant", "content": "Entendi que quieres V-01 y V-02 en MONACO."},
+        ],
+    )
+
+    assert intent.isAction is True
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.targetReferences == ["V-01", "V-02"]
+    assert intent.requestedValue == "MONACO"
+
+
+def test_contextual_read_only_question_stays_informational() -> None:
+    intent = _interpret_with_conversation(
+        "tienes claros los cambios?",
+        [{"role": "user", "content": "Pon V-01 y V-02 en MONACO"}],
+    )
+
+    assert intent.isAction is False
+    assert intent.actionType == "UNKNOWN"
+    assert intent.classificationReason == "INFORMATIONAL_GUARD"
+
+
+def test_isolated_yes_without_pending_plan_does_not_reconstruct_old_action() -> None:
+    intent = _interpret_with_conversation(
+        "si",
+        [{"role": "user", "content": "Pon V-01 y V-02 en MONACO"}],
+    )
+
+    assert intent.isAction is False
+    assert intent.actionType == "UNKNOWN"
+    assert intent.classificationReason == "NO_MUTATION_EVIDENCE"
+
+
+def test_contextual_conflicting_change_sets_require_clarification() -> None:
+    intent = _interpret_with_conversation(
+        "haz ese cambio",
+        [
+            {"role": "user", "content": "Pon V-01 en MONACO"},
+            {"role": "assistant", "content": "Entendido."},
+            {"role": "user", "content": "Pon V-01 en NAPOLES"},
+        ],
+    )
+
+    assert intent.isAction is False
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.requiresClarification is True
+    assert intent.classificationReason == "CONTEXTUAL_ACTION_CONFLICTING_CHANGE_SETS"
+
+
+def test_contextual_uses_those_options_does_not_become_literal_system_value() -> None:
+    intent = _interpret_with_conversation("usa esas opciones", [])
+
+    assert intent.isAction is False
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.requestedValue is None
+    assert intent.requiresClarification is True
+    assert intent.classificationReason == "CONTEXTUAL_ACTION_NOT_RESOLVED"
+
+
+def test_contextual_same_reference_different_occurrence_requires_clarification() -> None:
+    intent = _interpret_with_conversation(
+        "haz esos cambios",
+        [{"role": "user", "content": "Pon V-01 Nivel 1 en MONACO"}],
+        context={
+            "technicalProposal": {
+                "items": [
+                    {"itemId": "item-1", "sequence": 1, "reference": "V-01", "occurrenceContext": "Nivel 1"},
+                    {"itemId": "item-2", "sequence": 2, "reference": "V-01", "occurrenceContext": "Nivel 2"},
+                ]
+            }
+        },
+    )
+
+    assert intent.isAction is False
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.requiresClarification is True
+    assert intent.classificationReason == "CONTEXTUAL_TARGET_REFERENCE_AMBIGUOUS"
+
+
+def test_contextual_heterogeneous_system_values_fail_safe() -> None:
+    intent = _interpret_with_conversation(
+        "si, cambia los sistemas",
+        [
+            {"role": "user", "content": "V-01 y V-02 en MONACO y V-03 en SIENA"},
+            {"role": "assistant", "content": "Entendi V-01 y V-02 en MONACO y V-03 en SIENA."},
+        ],
+    )
+
+    assert intent.isAction is False
+    assert intent.actionType == "CHANGE_SYSTEM"
+    assert intent.requiresClarification is True
+    assert intent.classificationReason == "CONTEXTUAL_HETEROGENEOUS_VALUES_UNSUPPORTED"
+
+
 def test_chat_action_openapi_exposes_endpoint() -> None:
     with TestClient(app) as client:
         openapi = client.get("/openapi.json").json()
@@ -1006,6 +1368,18 @@ def _payload(
         "conversation": [],
         "context": context or {"requirementId": "req-1"},
     }
+
+
+def _interpret_with_conversation(
+    message: str,
+    conversation: list[dict[str, str]],
+    *,
+    scope: str = "REQUIREMENT",
+    context: dict | None = None,
+):
+    payload = _payload(message, scope=scope, context=context)
+    payload["conversation"] = conversation
+    return ChatActionInterpreter().interpret(ChatActionInterpretRequest.model_validate(payload))
 
 
 def _pending_context(

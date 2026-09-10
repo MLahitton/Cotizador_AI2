@@ -13,6 +13,7 @@ Estructura JSON esperada:
     "reference": string|null,
     "name": string|null,
     "category_raw": string|null,
+    "occurrence_context": string|null,
     "source_ids": [string],
     "source_hint": string|null,
     "status": "explicit"|"inferred"|"ambiguous"|"unknown"|"not_applicable"|null,
@@ -49,6 +50,7 @@ Instrucciones:
 - No consultes catalogo.
 - No infieras sistemas comerciales.
 
+Incluye occurrence_context cuando la fila/tabla/plano indique nivel, piso, seccion, bloque, ubicacion o contexto documental que distinga referencias repetidas.
 No incluyas en discovery: medidas detalladas, vidrio, perfiles, materiales, finish,
 accesorios, componentes detallados, variantes detalladas, ocurrencias detalladas,
 evidencia estructurada, relaciones, conflictos, precios ni catalogo.
@@ -190,6 +192,7 @@ confidence, notes.
 
 Instrucciones:
 - NO omitas ninguno de los discoveries recibidos.
+- Si el discovery trae occurrence_context, preservalo salvo evidencia explicita mejor; si difiere, conserva evidencia y marca ambiguity/review.
 - Analiza todas las fuentes para obtener informacion del discovery correspondiente.
 - Cuando una afirmacion tenga trazabilidad clara, agregala en evidence con source_id,
   text, page_number, sheet_name, cell_range, region o visual_description segun aplique.
@@ -494,8 +497,9 @@ def build_file_scope_prompt(
         (
             f"- temporary_id={item.temporary_id or f'discovery-{index}'!r}; "
             f"reference={item.reference!r}; name={item.name!r}; "
-            f"category_raw={item.category_raw!r}; source_ids={item.source_ids!r}; "
-            f"source_hint={item.source_hint!r}"
+            f"category_raw={item.category_raw!r}; "
+            f"occurrence_context={item.occurrence_context!r}; "
+            f"source_ids={item.source_ids!r}; source_hint={item.source_hint!r}"
         )
         for index, item in enumerate(discoveries, start=1)
     )
@@ -526,6 +530,7 @@ def build_file_enrichment_prompt(
             f"- temporary_id={item.temporary_id or f'discovery-{index}'!r}; "
             f"reference={item.reference!r}; "
             f"name={item.name!r}; category_raw={item.category_raw!r}; "
+            f"occurrence_context={item.occurrence_context!r}; "
             f"source_ids={item.source_ids!r}; "
             f"source_hint={item.source_hint!r}; "
             f"scope={scope_by_temporary_id.get(item.temporary_id or f'discovery-{index}')!r}"

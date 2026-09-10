@@ -66,6 +66,8 @@ def merge_enrichment_batches(
         if enriched is None:
             warnings.append(f"missing enrichment for temporary_id {temporary_id!r}")
             enriched = enrichment_from_discovery(discovered, index)
+        else:
+            enriched = _propagate_discovery_context(discovered, enriched, warnings)
         ordered_elements.append(enriched)
 
     for duplicate_id in sorted(duplicate_ids):
@@ -83,6 +85,7 @@ def enrichment_from_discovery(
         reference=discovery.reference,
         name=discovery.name,
         category_raw=discovery.category_raw,
+        occurrence_context=discovery.occurrence_context,
         evidence_notes=[discovery.source_hint] if discovery.source_hint else [],
         missing_or_unknown=["technical_enrichment"],
         status=ExtractionStatus.UNKNOWN,
@@ -90,6 +93,44 @@ def enrichment_from_discovery(
         notes="Preserved from discovery because enrichment did not return this item.",
     )
 
+
+
+def _propagate_discovery_context(
+    discovery: GeminiElementDiscovery,
+    enrichment: GeminiElementEnrichment,
+    warnings: list[str],
+) -> GeminiElementEnrichment:
+    discovery_context = _normalized_context(discovery.occurrence_context)
+    if discovery_context is None:
+        return enrichment
+
+    enrichment_context = _normalized_context(enrichment.occurrence_context)
+    if enrichment_context is None:
+        updated = enrichment.model_copy(deep=True)
+        updated.occurrence_context = discovery.occurrence_context
+        return updated
+
+    if discovery_context != enrichment_context:
+        updated = enrichment.model_copy(deep=True)
+        if "occurrence_context_conflict" not in updated.missing_or_unknown:
+            updated.missing_or_unknown.append("occurrence_context_conflict")
+        updated.status = ExtractionStatus.AMBIGUOUS
+        warnings.append(
+            "occurrence_context_conflict: discovery context "
+            f"{discovery.occurrence_context!r} differs from enrichment context "
+            f"{enrichment.occurrence_context!r} for temporary_id "
+            f"{enrichment.temporary_id!r}."
+        )
+        return updated
+
+    return enrichment
+
+
+def _normalized_context(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+
+    return "_".join(value.strip().casefold().replace("-", "_").split()) or None
 
 def enrichment_to_gemini_extraction(
     discovery: GeminiDiscoveryResult,
