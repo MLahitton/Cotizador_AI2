@@ -1,0 +1,451 @@
+{
+  "status": "PROPOSED_NOT_EXECUTED",
+  "case_count": 33,
+  "warning": "No constituye anotación exhaustiva de todos los campos del corpus ni resultado de pruebas de AI2.",
+  "cases": [
+    {
+      "id": "DIM-01",
+      "document_id": "D12",
+      "pages": [
+        1
+      ],
+      "subject": "V-01",
+      "source_observation": "Vista exterior: ancho 1.80 y alto 1.50; sección: arranque 0.90, cota total 2.40. Tabla: CANT. 1; SISTEMA BATIENTE.",
+      "proposed_acceptance_criterion": "Conservar altura 1.50, no 2.40; conservar 1 unidad y operación batiente. No convertir el título DETALLE PUERTA en clasificación funcional definitiva.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "DIM-02",
+      "document_id": "D12",
+      "pages": [
+        1
+      ],
+      "subject": "V-02",
+      "source_observation": "Detalle rotulado V-02: 1.36 × 0.60; sección con 1.80 de arranque y 2.40 total.",
+      "proposed_acceptance_criterion": "Asociar al detalle correcto; no tomar 1.30/0.65 del dibujo auxiliar ni cotas de V-01.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "DIM-03",
+      "document_id": "D12",
+      "pages": [
+        1
+      ],
+      "subject": "V-03",
+      "source_observation": "Ancho 0.70; alto 1.80; sección con 0.60 desde piso al arranque.",
+      "proposed_acceptance_criterion": "Devolver dimensiones propias 0.70 × 1.80 y separar elevaciones.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "MAT-01",
+      "document_id": "D12",
+      "pages": [
+        1
+      ],
+      "subject": "Alfajía / vidrio",
+      "source_observation": "Texto local menciona vidrio templado y Alfajia 6cm.",
+      "proposed_acceptance_criterion": "No convertir 6cm de alfajía en espesor del vidrio ni en 6mm. Conservar el objeto al que pertenece cada medida.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "GEO-01",
+      "document_id": "D14",
+      "pages": [
+        1
+      ],
+      "subject": "V-15",
+      "source_observation": "Ventana circular, dimensión exterior 1.22 × 1.22, tabla indica dos cuerpos batientes; sección contiene 0.95, 1.22 y 0.23.",
+      "proposed_acceptance_criterion": "Representar forma circular y dos cuerpos; no inventar puerta rectangular con visor ni usar 2.40 de alto.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "GEO-02",
+      "document_id": "D14",
+      "pages": [
+        1
+      ],
+      "subject": "V-16",
+      "source_observation": "Marco fijo rectangular 1.66 × 1.29; símbolo circular interior; tabla SISTEMA Fijo.",
+      "proposed_acceptance_criterion": "No interpretar el símbolo como un visor físico o componente circular.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "QTY-01",
+      "document_id": "D14",
+      "pages": [
+        1
+      ],
+      "subject": "V-19",
+      "source_observation": "Tabla CANT. 2; SISTEMA Fijo; ancho 1.24 y alto 1.29.",
+      "proposed_acceptance_criterion": "Preservar cantidad comercial 2 y dimensiones; no confundir un cuerpo de vidrio con una unidad comercial.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "TXT-01",
+      "document_id": "D03",
+      "pages": [
+        1
+      ],
+      "subject": "Bracamonte completo",
+      "source_observation": "PDF con cero texto recuperado en esta inspección; tabla visible V1–V13.",
+      "proposed_acceptance_criterion": "No descartar página ni devolver vacío porque falle el canal de texto nativo; procesar representación visual.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "QTY-02",
+      "document_id": "D03",
+      "pages": [
+        1
+      ],
+      "subject": "Bracamonte V1",
+      "source_observation": "Tabla: ancho .75, alto 2.25, sillar .40, dintel 2.65, cantidad 2.",
+      "proposed_acceptance_criterion": "Separar las cuatro dimensiones/posiciones y conservar 2 unidades; MATERIALES vacío debe permanecer sin especificación.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "QTY-03",
+      "document_id": "D03",
+      "pages": [
+        1
+      ],
+      "subject": "Bracamonte V3",
+      "source_observation": "Tabla: 1.20 × .65; sillar 2.00; dintel 2.65; cantidad 1.",
+      "proposed_acceptance_criterion": "No tomar la cota total 2.65 como altura de ventana.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "DOC-01",
+      "document_id": "D04",
+      "pages": [
+        1
+      ],
+      "subject": "Cuadro N1 campos BIM",
+      "source_observation": "Columnas Marca, Nivel, Familia, Recuento, Altura bruta, Anchura bruta.",
+      "proposed_acceptance_criterion": "Respetar semántica de encabezados y orden de columnas; Familia explícita puede sustentar función.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "DOC-02",
+      "document_id": "D04",
+      "pages": [
+        1
+      ],
+      "subject": "Cuadro N1 planta versus schedule",
+      "source_observation": "Planta contiene V-22, V-23, V-24 y V-25; cuadros visibles detallan V-1 a V-21.",
+      "proposed_acceptance_criterion": "Registrar observaciones/localizaciones sin inventar fichas completas para las referencias que carecen de detalle en estos cuadros.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "ID-01",
+      "document_id": "D05",
+      "pages": [
+        1
+      ],
+      "subject": "V-34 repetida",
+      "source_observation": "Dos filas V-34, cada una Recuento 1; dibujo muestra dos tramos de 2.05 y dimensión conjunta 4.10.",
+      "proposed_acceptance_criterion": "No eliminar una fila por referencia repetida ni duplicar unidades por vistas; conservar dos ocurrencias evidenciadas y relación entre ellas.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "ID-02",
+      "document_id": "D04/D05",
+      "pages": [
+        1
+      ],
+      "subject": "Referencias en dos niveles",
+      "source_observation": "V-4, V-8 y V-9 aparecen en ambos niveles; V-8 tiene ancho declarado 1.79 en N1 y 1.78 en N2.",
+      "proposed_acceptance_criterion": "No fusionar niveles ni presentar como conflicto del mismo objeto lo que puede corresponder a distintas ocurrencias.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "MAT-02",
+      "document_id": "D06",
+      "pages": [
+        1,
+        2,
+        4,
+        5,
+        7
+      ],
+      "subject": "Alcance de espesores",
+      "source_observation": "P1 contiene notas todos los vidrios 6mm; p2 arcos 8mm; otras páginas combinan 6 y 8 por detalle.",
+      "proposed_acceptance_criterion": "Aplicar notas por bloque/página/objetos asociados; no propagar 6mm a todo el archivo.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "QTY-04",
+      "document_id": "D06",
+      "pages": [
+        2
+      ],
+      "subject": "Arcos",
+      "source_observation": "Nota CANTIDAD ... 6 UND, junto a una secuencia ilustrada de varios arcos y alzado del mismo tipo.",
+      "proposed_acceptance_criterion": "Preservar cantidad 6; no usar número de vistas ni el número de arcos dibujados en una imagen ilustrativa como reemplazo.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "UNIT-01",
+      "document_id": "D06",
+      "pages": [
+        2
+      ],
+      "subject": "Radio del arco",
+      "source_observation": "Nota literal RADIO DE ARCO 0.87CM y cota de radio 0.87 en el dibujo.",
+      "proposed_acceptance_criterion": "Conservar literal y marcar posible incompatibilidad de unidad; no corregir silenciosamente CM a m.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "DOC-03",
+      "document_id": "D06",
+      "pages": [
+        3
+      ],
+      "subject": "Pérgola",
+      "source_observation": "Nota indica que es referente ilustrativo y remite a planos estructurales de otro profesional.",
+      "proposed_acceptance_criterion": "Conservar la dependencia documental; no presentar el detalle ilustrativo como diseño de fabricación validado.",
+      "risk": "high",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "DOC-04",
+      "document_id": "D06",
+      "pages": [
+        1,
+        4,
+        5,
+        7,
+        8
+      ],
+      "subject": "Punto de vista y paginación",
+      "source_observation": "Notas de isométricos alternan exterior/interior; PDF tiene 8 páginas y planchas A1–A7 y A9.",
+      "proposed_acceptance_criterion": "Conservar punto de vista y separar página física de número de plancha; registrar hueco aparente A8 sin inventar contenido.",
+      "risk": "high",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "DOC-05",
+      "document_id": "D01/D02",
+      "pages": [
+        1
+      ],
+      "subject": "Alto Verde",
+      "source_observation": "Planos con referencias fragmentadas V/PV y números; vistas POR FUERA y POR DENTRO; FIJO/CORRE.",
+      "proposed_acceptance_criterion": "Asociar planta y detalle sin contar dos veces; preservar perspectiva, tramos y etiquetas compuestas.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "UNIT-02",
+      "document_id": "D02",
+      "pages": [
+        1
+      ],
+      "subject": "Alto Verde unidades y rótulos",
+      "source_observation": "Coexisten cotas decimales, 98cm, 2.22m y rótulos que requieren reconciliación local.",
+      "proposed_acceptance_criterion": "Normalizar sólo con unidad justificable; conservar etiquetas contradictorias como candidatas, sin sustituir por cercanía.",
+      "risk": "high",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "DOC-06",
+      "document_id": "D07/D08/D09",
+      "pages": [
+        1
+      ],
+      "subject": "Croquis MM",
+      "source_observation": "Fotos de cuaderno con O/X, números, esquinas, círculo y dibujo tachado.",
+      "proposed_acceptance_criterion": "Conservar orientaciones y contenido; excluir o marcar la propuesta tachada como no vigente, no contar QR/marca de agua como elemento.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "ID-03",
+      "document_id": "D10/D11",
+      "pages": [
+        1
+      ],
+      "subject": "MM arquitectura",
+      "source_observation": "Fachadas, planta y secciones de la misma vivienda, sin relación formal demostrada para cada croquis.",
+      "proposed_acceptance_criterion": "Asociar por evidencia y conservar uncertain cuando no haya enlace fiable; no importar cotas estructurales o de habitaciones como dimensiones de cerramiento.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "CON-01",
+      "document_id": "D15",
+      "pages": [
+        2
+      ],
+      "subject": "Casa PS V-6",
+      "source_observation": "Planta/Descripción 2.64; alzado/columna Ancho 2.65; rótulos Sillar/Dintel 1.10/1.50 en alzado frente a 1.05/1.55 en tabla; altura explícita .50.",
+      "proposed_acceptance_criterion": "Registrar discrepancias por campo y localización; no ocultarlas detrás de una elección con confidence alta.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "ID-04",
+      "document_id": "D15",
+      "pages": [
+        2
+      ],
+      "subject": "Casa PS V-4",
+      "source_observation": "Dos filas V-4 con descripciones diferentes.",
+      "proposed_acceptance_criterion": "Conservar ambos registros y relación pendiente; no deduplicar ciegamente ni afirmar que son idénticos.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "ASM-01",
+      "document_id": "D15",
+      "pages": [
+        2,
+        3,
+        5
+      ],
+      "subject": "Casa PS conjuntos",
+      "source_observation": "Móvil+fijo, dos corredizos+rejilla, cabinas y techo de vidrio aparecen en el proyecto.",
+      "proposed_acceptance_criterion": "Preservar componentes reales y medidas parciales; no convertir rejilla en función única ni perder techo por filtro vertical.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "MAT-03",
+      "document_id": "D16",
+      "pages": [
+        4
+      ],
+      "subject": "Cabina PV2",
+      "source_observation": "Nota 10mm asociada a panel de vidrio y nota 5mm asociada a puerta batiente; cantidad 10.",
+      "proposed_acceptance_criterion": "Conservar ambos espesores por parte y cantidad comercial 10; no tomar el mayor espesor para todo.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "MAT-04",
+      "document_id": "D16",
+      "pages": [
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "subject": "Composición de vidrio",
+      "source_observation": "Vidrio 4mm y espacio interior 26mm para gas; marcos de madera, acabados por definir/bronce mate según objeto.",
+      "proposed_acceptance_criterion": "Separar cámara de gas, vidrio, madera y herrajes. No inventar segunda hoja ni espesor total no definido.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "ID-05",
+      "document_id": "D16",
+      "pages": [
+        9
+      ],
+      "subject": "V3",
+      "source_observation": "Dos bloques rotulados V3_Ventana 1.80 m, uno con cantidad 2 y otro 4, con dibujos diferentes.",
+      "proposed_acceptance_criterion": "Preservar los dos bloques y sus cantidades; no fusionar por texto de referencia.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "ASM-02",
+      "document_id": "D17",
+      "pages": [
+        1
+      ],
+      "subject": "V01",
+      "source_observation": "Cantidad 4; cuerpo fijo inferior + proyectantes; sistema 3831; vidrio6mm; perfil5cm.",
+      "proposed_acceptance_criterion": "Separar cantidades comerciales, componentes, dimensiones de perfil, vidrio y sistema solicitado; no reemplazar por producto comercial interno.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "CON-02",
+      "document_id": "D17",
+      "pages": [
+        1
+      ],
+      "subject": "V05/V07",
+      "source_observation": "Encabezado V05 y etiqueta en dibujo V-07 dentro de la misma ficha.",
+      "proposed_acceptance_criterion": "Registrar conflicto de identidad y no traspasar medidas de modo silencioso a otra referencia.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "CON-03",
+      "document_id": "D17",
+      "pages": [
+        3
+      ],
+      "subject": "PV15 área",
+      "source_observation": "Alto2500; ancho5320; M2:1.33 m declarado.",
+      "proposed_acceptance_criterion": "Mantener área declarada y área calculada13.30m² bajo interpretación milimétrica; señalar incompatibilidad, sin modificar el texto original.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    },
+    {
+      "id": "QTY-05",
+      "document_id": "D17",
+      "pages": [
+        7
+      ],
+      "subject": "PT14 cantidad",
+      "source_observation": "Campo CANTIDADES : UNIDAD sin cifra, con dos ubicaciones listadas.",
+      "proposed_acceptance_criterion": "No rellenar automáticamente cantidad1 o2; declarar ausencia y evidencia de ubicaciones por separado.",
+      "risk": "critical",
+      "test_execution_status": "NOT_RUN",
+      "annotation_scope": "Selected case; not a complete gold annotation of the document"
+    }
+  ]
+}

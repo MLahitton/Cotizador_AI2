@@ -1,0 +1,260 @@
+{
+  "schema_version": 1,
+  "corpus_id": "requerimientos_2026_09_11",
+  "source": "Requerimientos.zip aportado por el usuario",
+  "projects": [
+    {
+      "project_id": "alto_verde",
+      "folder_name": "ALTO VERDE",
+      "document_ids": [
+        "D01",
+        "D02"
+      ],
+      "annotation_status": "PENDING",
+      "extraction_validation_status": "NOT_VALIDATED"
+    },
+    {
+      "project_id": "bracamonte",
+      "folder_name": "BRACAMONTE",
+      "document_ids": [
+        "D03"
+      ],
+      "annotation_status": "PENDING",
+      "extraction_validation_status": "NOT_VALIDATED"
+    },
+    {
+      "project_id": "cuadro_ventanas",
+      "folder_name": "CUADRO VENTANAS",
+      "document_ids": [
+        "D04",
+        "D05"
+      ],
+      "annotation_status": "PENDING",
+      "extraction_validation_status": "NOT_VALIDATED"
+    },
+    {
+      "project_id": "haras",
+      "folder_name": "HARAS",
+      "document_ids": [
+        "D06"
+      ],
+      "annotation_status": "PENDING",
+      "extraction_validation_status": "NOT_VALIDATED"
+    },
+    {
+      "project_id": "mm",
+      "folder_name": "MM",
+      "document_ids": [
+        "D07",
+        "D08",
+        "D09",
+        "D10",
+        "D11"
+      ],
+      "annotation_status": "PENDING",
+      "extraction_validation_status": "NOT_VALIDATED"
+    },
+    {
+      "project_id": "proyecto_1",
+      "folder_name": "PROYECTO 1",
+      "document_ids": [
+        "D12",
+        "D13",
+        "D14"
+      ],
+      "annotation_status": "PARTIAL",
+      "extraction_validation_status": "NOT_VALIDATED"
+    },
+    {
+      "project_id": "casa_ps",
+      "folder_name": "pROYECTO 2",
+      "document_ids": [
+        "D15"
+      ],
+      "annotation_status": "PENDING",
+      "extraction_validation_status": "NOT_VALIDATED"
+    },
+    {
+      "project_id": "puertas_y_ventanas",
+      "folder_name": "PUERTAS Y VENTANAS",
+      "document_ids": [
+        "D16"
+      ],
+      "annotation_status": "PENDING",
+      "extraction_validation_status": "NOT_VALIDATED"
+    },
+    {
+      "project_id": "ventaneria_puertas",
+      "folder_name": "VENTANERIA PUERTAS",
+      "document_ids": [
+        "D17"
+      ],
+      "annotation_status": "PENDING",
+      "extraction_validation_status": "NOT_VALIDATED"
+    }
+  ],
+  "documents": [
+    {
+      "document_id": "D01",
+      "project_id": "alto_verde",
+      "archive_path": "Requerimientos/ALTO VERDE/CUADRO VENTANAS PRIMER NIVEL ALTO VERDE.pdf",
+      "size_bytes": 497828,
+      "sha256": "ee988e8eca7f87cb3192a5058285fefe76069e567afe7e1bc5d2cd05dc01dbe7",
+      "pdf_pages": 1,
+      "image_pixels": null
+    },
+    {
+      "document_id": "D02",
+      "project_id": "alto_verde",
+      "archive_path": "Requerimientos/ALTO VERDE/CUADRO VENTANAS SEGUNDO NIVEL ALTO VERDE.pdf",
+      "size_bytes": 503366,
+      "sha256": "67e970f4f63762e05a47417b0dc963e4225ccc2aef1c90ab51e5bd7ae0d94b8d",
+      "pdf_pages": 1,
+      "image_pixels": null
+    },
+    {
+      "document_id": "D03",
+      "project_id": "bracamonte",
+      "archive_path": "Requerimientos/BRACAMONTE/BRACAMONTE LOTE 5 (VENTANAS Y PUERTAS VIDRIERAS 04) (2).pdf",
+      "size_bytes": 68954,
+      "sha256": "9abd3c6916929c89fd656de62aa15f4085ee2fb352f787afb6111f3eb9f6282b",
+      "pdf_pages": 1,
+      "image_pixels": null
+    },
+    {
+      "document_id": "D04",
+      "project_id": "cuadro_ventanas",
+      "archive_path": "Requerimientos/CUADRO VENTANAS/CUADRO VENTANAS NIVEL 1 (3).pdf",
+      "size_bytes": 708492,
+      "sha256": "4f847a2a433a476df29b618fd9d48239690d1ad431463c9d82683b0a9bbe774e",
+      "pdf_pages": 1,
+      "image_pixels": null
+    },
+    {
+      "document_id": "D05",
+      "project_id": "cuadro_ventanas",
+      "archive_path": "Requerimientos/CUADRO VENTANAS/CUADRO VENTANAS NIVEL 2 (3).pdf",
+      "size_bytes": 787309,
+      "sha256": "77724f1a74ed88b2155b2cac4a795aa1b462aa483b746e21e7ff7a97d42fa4d5",
+      "pdf_pages": 1,
+      "image_pixels": null
+    },
+    {
+      "document_id": "D06",
+      "project_id": "haras",
+      "archive_path": "Requerimientos/HARAS/20251215_HARAS_CARPINTERÍA METÁLICA (2).pdf",
+      "size_bytes": 14267244,
+      "sha256": "eb1a745de91c93350fb4a3380d59c86fb9678f1ee80ce712fef1423bc1adc40e",
+      "pdf_pages": 8,
+      "image_pixels": null
+    },
+    {
+      "document_id": "D07",
+      "project_id": "mm",
+      "archive_path": "Requerimientos/MM/30983 (2).jpg",
+      "size_bytes": 4122896,
+      "sha256": "6cbad5a4c30473775cc717c1bb5fd6fcf4b1574490062853842674e62a128042",
+      "pdf_pages": null,
+      "image_pixels": [
+        3060,
+        4080
+      ]
+    },
+    {
+      "document_id": "D08",
+      "project_id": "mm",
+      "archive_path": "Requerimientos/MM/30984 (2).jpg",
+      "size_bytes": 4098547,
+      "sha256": "df1ea6188ed8c7a0430d4a6bb41a8581e886040fbae4aac5f1e3a36b70617876",
+      "pdf_pages": null,
+      "image_pixels": [
+        3060,
+        4080
+      ]
+    },
+    {
+      "document_id": "D09",
+      "project_id": "mm",
+      "archive_path": "Requerimientos/MM/30985 (2).jpg",
+      "size_bytes": 4271705,
+      "sha256": "b6a3b9e31a5c5016efe3cfeeeac54b45de913eb7d0d468659a6111a10e847cc4",
+      "pdf_pages": null,
+      "image_pixels": [
+        3060,
+        4080
+      ]
+    },
+    {
+      "document_id": "D10",
+      "project_id": "mm",
+      "archive_path": "Requerimientos/MM/MM1- 2 (2).pdf",
+      "size_bytes": 285791,
+      "sha256": "17f72aafaa25e7f5416ab526e770eb8a11d6bc1454cda37099710250867ef731",
+      "pdf_pages": 1,
+      "image_pixels": null
+    },
+    {
+      "document_id": "D11",
+      "project_id": "mm",
+      "archive_path": "Requerimientos/MM/MM1-1 (2).pdf",
+      "size_bytes": 475744,
+      "sha256": "4c9d3e1fd90670a38b199a4e5a005f34870fcac1e54c015204b22a5ff2365919",
+      "pdf_pages": 1,
+      "image_pixels": null
+    },
+    {
+      "document_id": "D12",
+      "project_id": "proyecto_1",
+      "archive_path": "Requerimientos/PROYECTO 1/D-16 VENTANAS.pdf",
+      "size_bytes": 360385,
+      "sha256": "41a60ad45572ebcbd9ecc5a6c03cbc380b503f1e101d3c894786f566440c4020",
+      "pdf_pages": 1,
+      "image_pixels": null
+    },
+    {
+      "document_id": "D13",
+      "project_id": "proyecto_1",
+      "archive_path": "Requerimientos/PROYECTO 1/D-17 VENTANAS.pdf",
+      "size_bytes": 327348,
+      "sha256": "b35d9e3081636b3bfcabde63fc576409b74643ff14d78a5b1c3e8c99a4ee335f",
+      "pdf_pages": 1,
+      "image_pixels": null
+    },
+    {
+      "document_id": "D14",
+      "project_id": "proyecto_1",
+      "archive_path": "Requerimientos/PROYECTO 1/D-18 VENTANAS.pdf",
+      "size_bytes": 293349,
+      "sha256": "0645dafc481e509149d5b0b5ac1c58ae2d864fe6650eee0e178c145e2c0c8981",
+      "pdf_pages": 1,
+      "image_pixels": null
+    },
+    {
+      "document_id": "D15",
+      "project_id": "casa_ps",
+      "archive_path": "Requerimientos/pROYECTO 2/CASA PS VENTANERIA (4).pdf",
+      "size_bytes": 2048567,
+      "sha256": "778241bd5b74733f9780031d4adcbba3b51150f6572d32ab50fe15bb1a2da647",
+      "pdf_pages": 6,
+      "image_pixels": null
+    },
+    {
+      "document_id": "D16",
+      "project_id": "puertas_y_ventanas",
+      "archive_path": "Requerimientos/PUERTAS Y VENTANAS/120626_NOMENCLATURA PUERTAS Y VENTANAS_removed (1).pdf",
+      "size_bytes": 4482063,
+      "sha256": "f4b5272e6c98d939d07305c2129a5487d89308d18f36761cb9973a95484ba881",
+      "pdf_pages": 9,
+      "image_pixels": null
+    },
+    {
+      "document_id": "D17",
+      "project_id": "ventaneria_puertas",
+      "archive_path": "Requerimientos/VENTANERIA PUERTAS/VENTANERIA - PUERTAS (1).pdf",
+      "size_bytes": 2014219,
+      "sha256": "b9ae3c18b0d4a554584c59a70d7160b0e3ebdefdde288563853bea74389a3a10",
+      "pdf_pages": 7,
+      "image_pixels": null
+    }
+  ]
+}

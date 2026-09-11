@@ -1,0 +1,234 @@
+{
+  "schema_version": 1,
+  "annotation_status": "PARTIAL_SEED",
+  "complete_gold": false,
+  "scope_note": "16 checks de valores en 3 elementos y un check de inventario de PROYECTO 1. No se aprueban materiales, evidencia, conflictos, incertidumbre ni el corpus completo. Los 33 criterios descriptivos se conservan en acceptance_matrix.json; no equivalen a 33 pruebas automáticas.",
+  "comparison_note": "Dimensiones de comparación expresadas en metros según lectura auditada; no se afirma que cada número del dibujo lleve sufijo m. Conversiones aceptadas sólo si el snapshot declara m/cm/mm. Sin redondeo de diseño. Los alias de operación son equivalencias de test, no un resolver productivo.",
+  "projects": [
+    {
+      "project_id": "alto_verde",
+      "annotation_complete": false,
+      "elements": []
+    },
+    {
+      "project_id": "bracamonte",
+      "annotation_complete": false,
+      "elements": []
+    },
+    {
+      "project_id": "cuadro_ventanas",
+      "annotation_complete": false,
+      "elements": []
+    },
+    {
+      "project_id": "haras",
+      "annotation_complete": false,
+      "elements": []
+    },
+    {
+      "project_id": "mm",
+      "annotation_complete": false,
+      "elements": []
+    },
+    {
+      "project_id": "proyecto_1",
+      "annotation_complete": false,
+      "elements": [
+        {
+          "reference": "V-01",
+          "document_id": "D12",
+          "page_number": 1,
+          "acceptance_case_id": "DIM-01",
+          "evidence_crop": "local_only/evidence/D16_V01.png",
+          "source_observation": "Cotas propias 1.80 × 1.50; tabla CANT. 1; SISTEMA BATIENTE; 2 cuerpos batientes.",
+          "checks": [
+            {
+              "check_id": "V01-W",
+              "kind": "measurement",
+              "field": "width",
+              "expected": 1.8,
+              "unit": "m",
+              "tolerance_m": "0.000001"
+            },
+            {
+              "check_id": "V01-H",
+              "kind": "measurement",
+              "field": "height",
+              "expected": 1.5,
+              "unit": "m",
+              "tolerance_m": "0.000001"
+            },
+            {
+              "check_id": "V01-Q",
+              "kind": "number",
+              "field": "quantity",
+              "expected": 1
+            },
+            {
+              "check_id": "V01-OP",
+              "kind": "text_one_of",
+              "field": "operation",
+              "expected": [
+                "batiente",
+                "doble batiente",
+                "swing",
+                "casement",
+                "doble_batiente"
+              ]
+            },
+            {
+              "check_id": "V01-P",
+              "kind": "number",
+              "field": "panel_count",
+              "expected": 2
+            }
+          ]
+        },
+        {
+          "reference": "V-15",
+          "document_id": "D14",
+          "page_number": 1,
+          "acceptance_case_id": "GEO-01",
+          "evidence_crop": "local_only/evidence/D18_V15.png",
+          "source_observation": "Ventana circular; cotas exteriores 1.22 × 1.22; CANT. 1; Batiente; dos cuerpos batientes.",
+          "checks": [
+            {
+              "check_id": "V15-W",
+              "kind": "measurement",
+              "field": "width",
+              "expected": 1.22,
+              "unit": "m",
+              "tolerance_m": "0.000001"
+            },
+            {
+              "check_id": "V15-H",
+              "kind": "measurement",
+              "field": "height",
+              "expected": 1.22,
+              "unit": "m",
+              "tolerance_m": "0.000001"
+            },
+            {
+              "check_id": "V15-Q",
+              "kind": "number",
+              "field": "quantity",
+              "expected": 1
+            },
+            {
+              "check_id": "V15-OP",
+              "kind": "text_one_of",
+              "field": "operation",
+              "expected": [
+                "batiente",
+                "doble batiente",
+                "swing",
+                "casement",
+                "doble_batiente"
+              ]
+            },
+            {
+              "check_id": "V15-P",
+              "kind": "number",
+              "field": "panel_count",
+              "expected": 2
+            },
+            {
+              "check_id": "V15-G",
+              "kind": "text_one_of",
+              "field": "geometry_type",
+              "expected": [
+                "circular",
+                "circle",
+                "round",
+                "circulo"
+              ]
+            }
+          ]
+        },
+        {
+          "reference": "V-19",
+          "document_id": "D14",
+          "page_number": 1,
+          "acceptance_case_id": "QTY-01",
+          "evidence_crop": "local_only/evidence/D18_V19_completo.png",
+          "source_observation": "Cotas 1.24 × 1.29; CANT. 2; SISTEMA Fijo; un marco y un cuerpo de vidrio por unidad.",
+          "checks": [
+            {
+              "check_id": "V19-W",
+              "kind": "measurement",
+              "field": "width",
+              "expected": 1.24,
+              "unit": "m",
+              "tolerance_m": "0.000001"
+            },
+            {
+              "check_id": "V19-H",
+              "kind": "measurement",
+              "field": "height",
+              "expected": 1.29,
+              "unit": "m",
+              "tolerance_m": "0.000001"
+            },
+            {
+              "check_id": "V19-Q",
+              "kind": "number",
+              "field": "quantity",
+              "expected": 2
+            },
+            {
+              "check_id": "V19-OP",
+              "kind": "text_one_of",
+              "field": "operation",
+              "expected": [
+                "fijo",
+                "fixed"
+              ]
+            },
+            {
+              "check_id": "V19-P",
+              "kind": "number",
+              "field": "panel_count",
+              "expected": 1
+            }
+          ]
+        }
+      ],
+      "expected_references": [
+        "V-01",
+        "V-02",
+        "V-03",
+        "V-04",
+        "V-05",
+        "V-06",
+        "V-07",
+        "V-08",
+        "V-09",
+        "V-10",
+        "V-11",
+        "V-12",
+        "V-13",
+        "V-14",
+        "V-15",
+        "V-16",
+        "V-17",
+        "V-18",
+        "V-19"
+      ]
+    },
+    {
+      "project_id": "casa_ps",
+      "annotation_complete": false,
+      "elements": []
+    },
+    {
+      "project_id": "puertas_y_ventanas",
+      "annotation_complete": false,
+      "elements": []
+    },
+    {
+      "project_id": "ventaneria_puertas",
+      "annotation_complete": false,
+      "elements": []
+    }
+  ]
+}
