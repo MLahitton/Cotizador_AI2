@@ -264,6 +264,7 @@ def _map_element(
             item.status,
             item.confidence,
             evidence_ids,
+            components=item.components,
         ),
         description=item.description,
         occurrences=[
@@ -1040,9 +1041,31 @@ def _map_functional_type(
     status: ExtractionStatus | None,
     confidence: float | None,
     evidence_ids: list[str],
+    components: list[GeminiComponent] | None = None,
 ) -> NormalizedValue | None:
     raw = raw_functional_type or category
     normalized = _normalize_functional_type(raw_functional_type, category, configuration)
+    explicit_function = raw_functional_type not in (None, "")
+    if explicit_function and normalized is not None:
+        return NormalizedValue(
+            normalized=normalized,
+            raw=raw,
+            status=_status_for_value(normalized or raw, status),
+            confidence=confidence,
+            evidence_ids=evidence_ids,
+        )
+
+    if not explicit_function and normalized is None and components is not None:
+        derived = _derive_functional_type_from_components(components, category)
+        if derived is not None:
+            return NormalizedValue(
+                normalized=derived,
+                raw=raw,
+                status=_status_for_value(derived, status),
+                confidence=confidence,
+                evidence_ids=evidence_ids,
+            )
+
     if normalized is None and raw in (None, ""):
         return None
 
@@ -1053,6 +1076,48 @@ def _map_functional_type(
         confidence=confidence,
         evidence_ids=evidence_ids,
     )
+
+
+def _derive_functional_type_from_components(
+    components: list[GeminiComponent],
+    category: str | None = None,
+) -> str | None:
+    roles = {
+        role
+        for component in components
+        if (role := _resolved_component_role(component)) is not None
+    }
+    if not roles:
+        return None
+
+    mobile_roles = [role for role in roles if role in {"SLIDING", "PROJECTING", "SWING", "CASEMENT", "FOLDING"}]
+    if len(mobile_roles) == 1:
+        mobile = mobile_roles[0]
+        if mobile == "PROJECTING":
+            return "PROJECTING"
+        if mobile == "CASEMENT":
+            return "CASEMENT"
+
+        if category in (None, ""):
+            return None
+
+        return _normalize_functional_type(
+            {
+                "SLIDING": "corrediza",
+                "SWING": "batiente",
+                "FOLDING": "plegable",
+            }[mobile],
+            category,
+            None,
+        )
+
+    if len(mobile_roles) > 1:
+        return None
+
+    secondary_roles = [role for role in roles if role in {"FIXED", "GRILLE", "LOUVER"}]
+    if len(secondary_roles) == 1:
+        return "GRILLE" if secondary_roles[0] in {"GRILLE", "LOUVER"} else secondary_roles[0]
+    return None
 
 
 def _normalized_signal(

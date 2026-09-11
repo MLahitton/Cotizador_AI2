@@ -1448,6 +1448,51 @@ def test_mapper_preserves_composite_functional_components(
     ] == expected_roles
 
 
+@pytest.mark.parametrize(
+    ("functional_type_raw", "category", "components", "expected_function", "expected_assembly"),
+    [
+        ("SLIDING_WINDOW", "ventana", ["SLIDING", "GRILLE"], "SLIDING_WINDOW", "COMPOSITE"),
+        ("PROJECTING", "ventana", ["PROJECTING", "FIXED"], "PROJECTING", "COMPOSITE"),
+        ("SWING_DOOR", "puerta", ["SWING", "FIXED"], "SWING_DOOR", "COMPOSITE"),
+        ("FIXED", "ventana", ["FIXED"], "FIXED", None),
+        (None, "ventana", ["SLIDING", "GRILLE"], "SLIDING_WINDOW", "COMPOSITE"),
+        (None, "puerta", ["SLIDING", "FIXED"], "SLIDING_DOOR", "COMPOSITE"),
+        (None, None, ["SLIDING", "GRILLE"], None, "COMPOSITE"),
+        (None, None, ["SWING", "FIXED"], None, "COMPOSITE"),
+    ],
+)
+def test_mapper_prefers_primary_movable_function_over_secondary_roles(
+    functional_type_raw: str | None,
+    category: str | None,
+    components: list[str],
+    expected_function: str | None,
+    expected_assembly: str | None,
+) -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="composite-mobile-primary",
+                category=category,
+                functional_type=functional_type_raw,
+                components=[GeminiComponent(role=role, quantity=1) for role in components],
+                status=ExtractionStatus.EXPLICIT,
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+    roles = [
+        component.role.normalized for component in element.components if component.role is not None
+    ]
+
+    if expected_function is None:
+        assert element.functional_type is None
+    else:
+        assert element.functional_type is not None
+        assert element.functional_type.normalized == expected_function
+    assert element.assembly_type == expected_assembly
+    assert roles == components
 def test_mapper_preserves_grille_only_without_artificial_mobile_component() -> None:
     extraction = GeminiExtraction(
         elements=[

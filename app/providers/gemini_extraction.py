@@ -1,9 +1,11 @@
 import json
+import os
 import logging
 import re
 import struct
 import time
 import zipfile
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -30,6 +32,7 @@ from app.services.extraction_prompt import (
 )
 from app.services.gemini_enrichment_pipeline import (
     build_discovery_batches,
+    reconcile_and_build_gemini_extraction,
     enrichment_to_gemini_extraction,
     merge_enrichment_batches,
     sum_token_usage,
@@ -40,7 +43,7 @@ from app.services.gemini_scope_pipeline import (
     scope_lookup,
     select_discoveries_for_enrichment,
 )
-from app.services.inventory_reconciliation import InventoryDecision, reconcile_inventory_candidates
+from app.services.inventory_reconciliation import InventoryDecision
 from app.services.inventory_trace import (
     InventoryDebugTrace,
     discovery_inventory_elements,
@@ -202,6 +205,12 @@ class GeminiExtractionProvider:
         total_started = time.perf_counter()
         file_load_started = time.perf_counter()
         with _RequirementFileContext(self, files) as context:
+            extraction_stage_debug = os.getenv("AI2_DEBUG_EXTRACTION_STAGES") == "1"
+            extraction_stage_dir = (
+                _initial_extraction_stage_dir()
+                if extraction_stage_debug
+                else None
+            )
             _log_perf(
                 requirement_id,
                 "FILE_LOAD",
@@ -221,6 +230,11 @@ class GeminiExtractionProvider:
                 )
             )
             discovery = _parse_gemini_discovery_response(discovery_response, discovery_debug)
+            _persist_stage_snapshot(
+                extraction_stage_dir,
+                "01-discovery.json",
+                discovery,
+            )
             _log_perf(
                 requirement_id,
                 "LLM_STRUCTURED_EXTRACTION",
@@ -268,6 +282,11 @@ class GeminiExtractionProvider:
                 debug_capture=enrichment_debug,
                 scope=scope,
             )
+            _persist_stage_snapshot(
+                extraction_stage_dir,
+                "02-enrichment.json",
+                enrichment,
+            )
             _log_perf(
                 requirement_id,
                 "LLM_STRUCTURED_EXTRACTION",
@@ -276,7 +295,22 @@ class GeminiExtractionProvider:
                 batch_count=len(enrichment_debug.batch_results or []),
             )
             postprocess_started = time.perf_counter()
-            gemini_extraction = enrichment_to_gemini_extraction(scoped_discovery, enrichment)
+            gemini_extraction, reconciled_enrichment, reconciliation_decisions = (
+                reconcile_and_build_gemini_extraction(scoped_discovery, enrichment)
+                if extraction_stage_debug or debug_capture is not None
+                else (enrichment_to_gemini_extraction(scoped_discovery, enrichment), None, None)
+            )
+            if extraction_stage_debug or debug_capture is not None:
+                _persist_stage_snapshot(
+                    extraction_stage_dir,
+                    "03-reconciled.json",
+                    reconciled_enrichment,
+                )
+            _persist_stage_snapshot(
+                extraction_stage_dir,
+                "04-pre-mapper.json",
+                gemini_extraction,
+            )
             extraction = map_gemini_extraction_to_requirement_extraction(
                 gemini_extraction,
                 model_provider="google",
@@ -301,27 +335,32 @@ class GeminiExtractionProvider:
             )
 
             if debug_capture is not None:
-                reconciled_enrichment, reconciliation_decisions = reconcile_inventory_candidates(
-                    enrichment
-                )
                 if enrichment_debug.inventory_trace is not None:
                     inventory_trace.stages.extend(enrichment_debug.inventory_trace.stages)
                 debug_capture.discovery = discovery
                 debug_capture.scope = scope
                 debug_capture.enrichment = enrichment
                 debug_capture.gemini_extraction = gemini_extraction
-                inventory_trace.add_stage(
-                    "MERGED_ENRICHMENT",
-                    enrichment_inventory_elements(enrichment),
-                )
-                inventory_trace.add_stage(
-                    "PRE_RECONCILIATION",
-                    enrichment_inventory_elements(enrichment),
-                )
-                inventory_trace.add_stage(
-                    "POST_RECONCILIATION",
-                    enrichment_inventory_elements(reconciled_enrichment),
-                )
+                debug_capture.reconciliation_decisions = reconciliation_decisions
+                debug_capture.discovery_debug = discovery_debug
+                debug_capture.scope_debug = scope_debug
+                debug_capture.enrichment_debug = enrichment_debug
+                debug_capture.model = self._provider.model
+                debug_capture.batch_size = enrichment_debug.batch_size
+                debug_capture.batch_count = len(enrichment_debug.batch_results or [])
+                if reconciled_enrichment is not None:
+                    inventory_trace.add_stage(
+                        "MERGED_ENRICHMENT",
+                        enrichment_inventory_elements(enrichment),
+                    )
+                    inventory_trace.add_stage(
+                        "PRE_RECONCILIATION",
+                        enrichment_inventory_elements(enrichment),
+                    )
+                    inventory_trace.add_stage(
+                        "POST_RECONCILIATION",
+                        enrichment_inventory_elements(reconciled_enrichment),
+                    )
                 inventory_trace.add_stage(
                     "FINAL_REQUIREMENT_EXTRACTION",
                     final_inventory_elements(extraction),
@@ -332,13 +371,6 @@ class GeminiExtractionProvider:
                     stage="merged_enrichment_before_reconciliation",
                     source_file_names_by_id=_source_file_names_by_id(context.file_specs),
                 )
-                debug_capture.reconciliation_decisions = reconciliation_decisions
-                debug_capture.discovery_debug = discovery_debug
-                debug_capture.scope_debug = scope_debug
-                debug_capture.enrichment_debug = enrichment_debug
-                debug_capture.model = self._provider.model
-                debug_capture.batch_size = enrichment_debug.batch_size
-                debug_capture.batch_count = len(enrichment_debug.batch_results or [])
 
             _log_perf(
                 requirement_id,
@@ -857,6 +889,37 @@ def _model_json(value) -> str:
     if hasattr(value, "model_dump"):
         return json.dumps(value.model_dump(mode="json"), ensure_ascii=False)
     return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _make_extraction_stage_dir() -> Path:
+    base = Path("runtime") / "extraction-stages"
+    run_id = uuid.uuid4().hex
+    path = base / run_id
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _initial_extraction_stage_dir() -> Path | None:
+    try:
+        return _make_extraction_stage_dir()
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Extraction stage snapshot directory failed: %s", exc)
+        return None
+
+
+def _persist_stage_snapshot(path: Path | None, filename: str, value: object) -> None:
+    if path is None:
+        return
+    try:
+        serialized = (
+            value.model_dump(mode="json")
+            if hasattr(value, "model_dump")
+            else value
+        )
+        target = path / filename
+        target.write_text(json.dumps(serialized, ensure_ascii=False), encoding="utf-8")
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Extraction stage snapshot write failed: %s", exc)
 
 
 def _parse_gemini_discovery_response(

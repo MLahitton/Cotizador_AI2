@@ -20,7 +20,7 @@ from app.models.gemini_extraction import (
     GeminiVariant,
 )
 from app.models.requirement import TokenUsage
-from app.services.inventory_reconciliation import reconcile_inventory_candidates
+from app.services.inventory_reconciliation import InventoryDecision, reconcile_inventory_candidates
 
 
 def build_discovery_batches(
@@ -136,15 +136,45 @@ def enrichment_to_gemini_extraction(
     discovery: GeminiDiscoveryResult,
     enrichment: GeminiEnrichmentResult,
 ) -> GeminiExtraction:
-    reconciled, _ = reconcile_inventory_candidates(enrichment)
+    extraction, _ = _reconciled_extraction_and_result(discovery, enrichment)
+    return extraction
+
+
+def reconcile_enrichment_for_gemini_extraction(
+    enrichment: GeminiEnrichmentResult,
+) -> tuple[GeminiEnrichmentResult, list[InventoryDecision]]:
+    return reconcile_inventory_candidates(enrichment)
+
+
+def reconcile_and_build_gemini_extraction(
+    discovery: GeminiDiscoveryResult,
+    enrichment: GeminiEnrichmentResult,
+) -> tuple[GeminiExtraction, GeminiEnrichmentResult, list[InventoryDecision]]:
+    reconciled, decisions = reconcile_enrichment_for_gemini_extraction(enrichment)
+    return _enrichment_to_gemini_extraction(discovery, reconciled), reconciled, decisions
+
+
+def _reconciled_extraction_and_result(
+    discovery: GeminiDiscoveryResult,
+    enrichment: GeminiEnrichmentResult,
+) -> tuple[GeminiExtraction, GeminiEnrichmentResult]:
+    reconciled, _ = reconcile_enrichment_for_gemini_extraction(enrichment)
+    extraction = _enrichment_to_gemini_extraction(discovery, reconciled)
+    return extraction, reconciled
+
+
+def _enrichment_to_gemini_extraction(
+    discovery: GeminiDiscoveryResult,
+    reconciled_enrichment: GeminiEnrichmentResult,
+) -> GeminiExtraction:
     elements = [
         _enriched_to_gemini_element(item, index)
-        for index, item in enumerate(reconciled.elements, start=1)
+        for index, item in enumerate(reconciled_enrichment.elements, start=1)
     ]
     return GeminiExtraction(
         elements=elements,
         unknown_fields=[],
-        notes="\n".join(discovery.notes + reconciled.warnings) or None,
+        notes="\n".join(discovery.notes + reconciled_enrichment.warnings) or None,
     )
 
 
