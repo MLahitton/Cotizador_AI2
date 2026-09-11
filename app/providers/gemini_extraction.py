@@ -70,7 +70,9 @@ from app.services.semantic_review import (
     completed_review_trace,
     parse_semantic_field_review_response,
     quantity_numeric_collision_summary,
+    resolve_measurement_review_locator,
     resolve_quantity_review_locator,
+    should_review_measurements,
     should_review_quantity,
     skipped_review_trace,
 )
@@ -287,6 +289,12 @@ class GeminiExtractionProvider:
                 "02-enrichment.json",
                 enrichment,
             )
+            if extraction_stage_debug:
+                _persist_stage_snapshot(
+                    extraction_stage_dir,
+                    "02b-measurement-review-candidates.json",
+                    enrichment_debug.measurement_review_candidates or [],
+                )
             _log_perf(
                 requirement_id,
                 "LLM_STRUCTURED_EXTRACTION",
@@ -474,6 +482,12 @@ class GeminiExtractionProvider:
                 quantity_grounding_decisions,
                 batch_numeric_trace,
             )
+            measurement_review_candidates = (
+                self._trace_measurement_review_candidates(batch_result)
+                if os.getenv("AI2_DEBUG_EXTRACTION_STAGES") == "1"
+                or debug_capture is not None
+                else []
+            )
             usage = _extract_token_usage(response)
             batch_results.append(batch_result)
             batch_usage.append(usage)
@@ -484,6 +498,9 @@ class GeminiExtractionProvider:
                 debug_capture.batch_usage.append(usage)
                 debug_capture.quantity_grounding_decisions.extend(quantity_grounding_decisions)
                 debug_capture.semantic_review_decisions.extend(semantic_review_traces)
+                debug_capture.measurement_review_candidates.extend(
+                    measurement_review_candidates
+                )
                 debug_capture.region_sanitization_events.extend(region_events)
                 debug_capture.inventory_trace.add_stage(
                     f"ENRICHMENT_BATCH_{len(debug_capture.batch_results)}",
@@ -503,6 +520,54 @@ class GeminiExtractionProvider:
             debug_capture.batch_size = resolved_batch_size
             debug_capture.model = self._provider.model
         return merged
+
+    def _trace_measurement_review_candidates(
+        self,
+        enrichment: GeminiEnrichmentResult,
+    ) -> list[dict[str, Any]]:
+        traces: list[dict[str, Any]] = []
+
+        for element in enrichment.elements:
+            should_review, trigger_reason = should_review_measurements(element)
+            locator = (
+                resolve_measurement_review_locator(element)
+                if should_review
+                else SourceLocator()
+            )
+
+            trace = {
+                "temporary_id": element.temporary_id,
+                "reference": element.reference,
+                "should_review": should_review,
+                "trigger_reason": trigger_reason,
+                "source_id": locator.source_id,
+                "page_number": locator.page_number,
+                "sheet_name": locator.sheet_name,
+                "cell_range": locator.cell_range,
+                "region": (
+                    locator.region.model_dump(mode="json")
+                    if locator.region is not None
+                    and hasattr(locator.region, "model_dump")
+                    else locator.region
+                ),
+                "locator_used": locator.locator_used,
+                "locator_strength": locator.locator_strength,
+            }
+            traces.append(trace)
+
+            if should_review:
+                logger.info(
+                    "[MEASUREMENT_REVIEW_CANDIDATE] reference=%s "
+                    "temporary_id=%s reason=%s source_id=%s page=%s region=%s",
+                    element.reference,
+                    element.temporary_id,
+                    trigger_reason,
+                    locator.source_id,
+                    locator.page_number,
+                    trace["region"],
+                )
+
+        return traces
 
     def _review_batch_quantities(
         self,
@@ -708,6 +773,7 @@ class GeminiEnrichmentDebugCapture:
     merged_numeric_trace: NumericResolutionTrace | None = None
     quantity_grounding_decisions: list[QuantityGroundingDecision] | None = None
     semantic_review_decisions: list[SemanticReviewTrace] | None = None
+    measurement_review_candidates: list[dict[str, Any]] | None = None
     batch_size: int | None = None
     model: str | None = None
 
@@ -726,6 +792,11 @@ class GeminiEnrichmentDebugCapture:
         )
         self.semantic_review_decisions = (
             [] if self.semantic_review_decisions is None else self.semantic_review_decisions
+        )
+        self.measurement_review_candidates = (
+            []
+            if self.measurement_review_candidates is None
+            else self.measurement_review_candidates
         )
         self.inventory_trace = (
             InventoryDebugTrace() if self.inventory_trace is None else self.inventory_trace

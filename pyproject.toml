@@ -13,6 +13,7 @@ dependencies = [
     "openpyxl",
     "pillow",
     "httpx",
+    "pypdfium2>=5.8,<6",
 ]
 
 [project.optional-dependencies]

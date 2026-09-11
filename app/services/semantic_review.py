@@ -156,6 +156,102 @@ def should_review_quantity(
     return False, "NO_NUMERIC_SUSPICION"
 
 
+def should_review_measurements(
+    element: GeminiElementEnrichment,
+) -> tuple[bool, str]:
+    measurements = element.measurements or []
+
+    widths = [
+        measurement
+        for measurement in measurements
+        if (measurement.type or "").lower() == "width"
+        and measurement.value is not None
+    ]
+    heights = [
+        measurement
+        for measurement in measurements
+        if (measurement.type or "").lower() == "height"
+        and measurement.value is not None
+    ]
+    related_vertical = [
+        measurement
+        for measurement in measurements
+        if (measurement.type or "").lower()
+        in {
+            "sill_height",
+            "bottom_elevation",
+            "top_elevation",
+        }
+        and measurement.value is not None
+    ]
+
+    if len(widths) > 1:
+        return True, "MULTIPLE_WIDTH_CANDIDATES"
+
+    if len(heights) > 1:
+        return True, "MULTIPLE_HEIGHT_CANDIDATES"
+
+    if heights and related_vertical:
+        return True, "HEIGHT_WITH_VERTICAL_CONTEXT"
+
+    evidence_text = " ".join(
+        part
+        for evidence in element.evidence
+        for part in (
+            evidence.text,
+            evidence.visual_description,
+            evidence.notes,
+        )
+        if part
+    ).lower()
+
+    vertical_terms = (
+        "antepecho",
+        "sill",
+        "nivel",
+        "npt",
+        "piso",
+        "floor",
+    )
+
+    if heights and any(term in evidence_text for term in vertical_terms):
+        return True, "VERTICAL_REFERENCE_CONTEXT"
+
+    component_vertical_measurements = [
+        measurement
+        for component in (element.components or [])
+        for measurement in (component.measurements or [])
+        if (measurement.type or "").lower()
+        in {
+            "height",
+            "sill_height",
+            "bottom_elevation",
+            "top_elevation",
+        }
+        and measurement.value is not None
+    ]
+
+    element_height_values = {
+        float(measurement.value)
+        for measurement in heights
+        if measurement.value is not None
+    }
+
+    component_height_values = {
+        float(measurement.value)
+        for measurement in component_vertical_measurements
+        if measurement.value is not None
+    }
+
+    if (
+        element_height_values
+        and component_height_values
+        and not component_height_values.issubset(element_height_values)
+    ):
+        return True, "COMPONENT_VERTICAL_DECOMPOSITION"
+
+    return False, "NO_MEASUREMENT_SUSPICION"
+
 def resolve_quantity_review_locator(
     element: GeminiElementEnrichment,
     grounding_decision: QuantityGroundingDecision | None,
@@ -256,6 +352,44 @@ def resolve_quantity_review_locator(
             locator_strength="REFERENCE_ONLY",
             region_missing_origin="MODEL_NOT_PROVIDED",
         )
+
+    return SourceLocator()
+
+
+def resolve_measurement_review_locator(
+    element: GeminiElementEnrichment,
+) -> SourceLocator:
+    for evidence in element.evidence:
+        if (
+            evidence.source_id
+            or evidence.page_number
+            or evidence.sheet_name
+            or evidence.cell_range
+            or evidence.region
+        ):
+            return SourceLocator(
+                source_id=evidence.source_id,
+                page_number=evidence.page_number,
+                sheet_name=evidence.sheet_name,
+                cell_range=evidence.cell_range,
+                region=evidence.region,
+                text_context=None,
+                text_context_is_first_pass=True,
+                locator_confidence=0.8,
+                locator_used="ELEMENT_EVIDENCE",
+                locator_strength=_locator_strength(
+                    source_id=evidence.source_id,
+                    page_number=evidence.page_number,
+                    sheet_name=evidence.sheet_name,
+                    cell_range=evidence.cell_range,
+                    region=evidence.region,
+                ),
+                region_missing_origin=_region_missing_origin(
+                    source_id=evidence.source_id,
+                    page_number=evidence.page_number,
+                    region=evidence.region,
+                ),
+            )
 
     return SourceLocator()
 
