@@ -1427,6 +1427,109 @@ def test_mapper_derives_components_from_explicit_sliding_and_grille_signals() ->
     assert roles == ["GRILLE", "SLIDING"]
 
 
+def test_mapper_keeps_single_component_when_role_is_non_canonical_and_type_is_sliding() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="movable-panel-vs-sliding",
+                components=[
+                    GeminiComponent(
+                        role="movable_panel",
+                        type="SLIDING",
+                        status=ExtractionStatus.EXPLICIT,
+                    )
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+
+    assert len(element.components) == 1
+    assert element.components[0].role is not None
+    assert element.components[0].role.raw == "movable_panel"
+    assert element.components[0].role.status == ExtractionStatus.EXPLICIT
+
+
+def test_mapper_keeps_single_component_when_role_is_non_canonical_and_type_is_fixed() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="fixed-panel-vs-fixed",
+                components=[
+                    GeminiComponent(
+                        role="fixed_panel",
+                        type="FIXED",
+                        status=ExtractionStatus.EXPLICIT,
+                    )
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+
+    assert len(element.components) == 1
+    assert element.components[0].role is not None
+    assert element.components[0].role.raw == "fixed_panel"
+    assert element.components[0].role.status == ExtractionStatus.EXPLICIT
+
+
+def test_mapper_uses_component_type_for_dedup_but_preserves_non_canonical_raw_role() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="custom-role-projecting",
+                components=[
+                    GeminiComponent(
+                        role="custom_role",
+                        type="PROJECTING",
+                        status=ExtractionStatus.EXPLICIT,
+                    )
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+
+    assert len(element.components) == 1
+    assert element.components[0].role is not None
+    assert element.components[0].role.raw == "custom_role"
+    assert element.components[0].role.status == ExtractionStatus.EXPLICIT
+    assert element.components[0].type is None or element.components[0].type.raw == "PROJECTING"
+
+
+def test_mapper_keeps_distinct_components_and_composite_assembly_type() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="fixed-and-sliding-panels",
+                category="ventana",
+                components=[
+                    GeminiComponent(role="FIXED", status=ExtractionStatus.EXPLICIT),
+                    GeminiComponent(role="SLIDING", status=ExtractionStatus.EXPLICIT),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(extraction)
+    element = result.elements[0]
+    roles = [
+        component.role.normalized
+        for component in element.components
+        if component.role is not None
+    ]
+
+    assert element.assembly_type == "COMPOSITE"
+    assert len(element.components) == 2
+    assert roles == ["FIXED", "SLIDING"]
+
+
 def test_mapper_derives_projecting_and_fixed_components_from_item_signals() -> None:
     extraction = GeminiExtraction(
         elements=[

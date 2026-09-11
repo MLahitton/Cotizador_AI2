@@ -1107,12 +1107,19 @@ def _normalize_component_role(value: str | None) -> str | None:
     return normalized if normalized in canonical_roles else None
 
 
+def _resolved_component_role(component: GeminiComponent) -> str | None:
+    return (
+        _normalize_component_role(component.role)
+        or _normalize_component_role(component.type)
+    )
+
+
 def _component_candidates(item: GeminiElement) -> list[GeminiComponent]:
     candidates = list(item.components)
     existing_roles = {
         role
         for component in candidates
-        if (role := _normalize_component_role(component.role or component.type)) is not None
+        if (role := _resolved_component_role(component)) is not None
     }
 
     for role in _component_roles_from_item(item):
@@ -1262,7 +1269,7 @@ def _normalize_assembly_type(
     roles = {
         role
         for component in components
-        if (role := _normalize_component_role(component.role or component.type)) is not None
+        if (role := _resolved_component_role(component)) is not None
     }
     functional_roles = {
         role
