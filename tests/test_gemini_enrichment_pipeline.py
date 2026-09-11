@@ -1228,6 +1228,7 @@ def test_inventory_reconciliation_marks_quantity_conflict_without_silent_overwri
                     temporary_id="table",
                     reference="V-10",
                     quantity=25,
+                    quantity_status=ExtractionStatus.EXPLICIT,
                     measurements=[
                         GeminiEnrichmentMeasurement(type="width", value=2800, unit="mm"),
                         GeminiEnrichmentMeasurement(type="height", value=2900, unit="mm"),
@@ -1237,6 +1238,7 @@ def test_inventory_reconciliation_marks_quantity_conflict_without_silent_overwri
                     temporary_id="level-note",
                     reference="V-10",
                     quantity=5,
+                    quantity_status=ExtractionStatus.EXPLICIT,
                     occurrence_context="N.P_5 / niveles 5 al 9",
                     evidence=[
                         GeminiEnrichmentEvidenceNote(
@@ -1255,8 +1257,80 @@ def test_inventory_reconciliation_marks_quantity_conflict_without_silent_overwri
     assert element.reference == "V-10"
     assert element.quantity == 25
     assert element.status == ExtractionStatus.AMBIGUOUS
+    assert element.quantity_status == ExtractionStatus.AMBIGUOUS
     assert SOURCE_CONFLICT_REASON in element.missing_or_unknown
     assert SOURCE_CONFLICT_REASON in (extraction.notes or "")
+
+
+def test_inventory_reconciliation_preserves_explicit_quantity_despite_other_field_conflicts() -> None:
+    extraction = enrichment_to_gemini_extraction(
+        GeminiDiscoveryResult(),
+        GeminiEnrichmentResult(
+            elements=[
+                GeminiElementEnrichment(
+                    temporary_id="table",
+                    reference="V-10",
+                    quantity=2,
+                    quantity_status=ExtractionStatus.EXPLICIT,
+                    functional_type_raw="puerta",
+                ),
+                GeminiElementEnrichment(
+                    temporary_id="level-note",
+                    reference="V-10",
+                    quantity=2,
+                    quantity_status=ExtractionStatus.EXPLICIT,
+                    functional_type_raw="ventana",
+                    panel_count=3,
+                ),
+            ]
+        ),
+    )
+
+    element = extraction.elements[0]
+
+    assert len(extraction.elements) == 1
+    assert element.quantity == 2
+    assert element.quantity_status == ExtractionStatus.EXPLICIT
+    assert element.status == ExtractionStatus.AMBIGUOUS
+    assert SOURCE_CONFLICT_REASON in element.missing_or_unknown
+
+
+def test_inventory_reconciliation_preserves_explicit_quantity_with_panel_and_component_counts() -> None:
+    extraction = enrichment_to_gemini_extraction(
+        GeminiDiscoveryResult(),
+        GeminiEnrichmentResult(
+            elements=[
+                GeminiElementEnrichment(
+                    temporary_id="definition",
+                    reference="X-01",
+                    quantity=2,
+                    quantity_status=ExtractionStatus.EXPLICIT,
+                    panel_count=2,
+                    components=[
+                        GeminiEnrichmentComponent(role="FRAME", quantity=1),
+                        GeminiEnrichmentComponent(role="LEAF", quantity=1),
+                    ],
+                ),
+                GeminiElementEnrichment(
+                    temporary_id="occurrence",
+                    reference="X-1",
+                    operation_raw="CORREDIZA",
+                    components=[
+                        GeminiEnrichmentComponent(role="FRAME", quantity=1),
+                    ],
+                ),
+            ]
+        ),
+    )
+
+    element = extraction.elements[0]
+
+    assert len(extraction.elements) == 1
+    assert element.reference == "X-01"
+    assert element.quantity == 2
+    assert element.quantity_status == ExtractionStatus.EXPLICIT
+    assert element.panel_count == 2
+    assert len(element.components) >= 1
 
 
 def test_inventory_reconciliation_trace_shows_commercial_quantity_beats_repetition_count() -> None:

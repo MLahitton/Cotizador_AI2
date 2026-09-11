@@ -391,13 +391,18 @@ def _merge_reference_group(
     base = ordered[0].model_copy(deep=True)
     warnings = [f"{reason}: merged {len(items)} candidates for {canonical}."]
     conflicts: list[str] = []
+    explicit_quantity_values: set[object] = set()
 
     base.reference = canonical
+    for item in ordered:
+        if item.quantity_status == ExtractionStatus.EXPLICIT and not _is_empty(item.quantity):
+            explicit_quantity_values.add(item.quantity)
+
     for item in ordered[1:]:
         _fill_scalar(base, item, "name", conflicts)
         _fill_scalar(base, item, "category_raw", conflicts)
         _fill_scalar(base, item, "description", conflicts)
-        _fill_scalar(base, item, "quantity", conflicts)
+        _fill_scalar(base, item, "quantity", [])
         _fill_scalar(base, item, "functional_type_raw", conflicts)
         _fill_scalar(base, item, "operation_raw", conflicts)
         _fill_scalar(base, item, "geometry_type_raw", conflicts)
@@ -415,6 +420,21 @@ def _merge_reference_group(
         _extend_text(base.missing_or_unknown, item.missing_or_unknown)
         if _text(item.notes):
             base.notes = _join_notes(base.notes, item.notes)
+
+    if len(explicit_quantity_values) == 1:
+        explicit_value = next(iter(explicit_quantity_values))
+        base.quantity = explicit_value
+        base.quantity_status = ExtractionStatus.EXPLICIT
+
+    if len(explicit_quantity_values) > 1:
+        base.status = ExtractionStatus.AMBIGUOUS
+        if base.quantity_status != ExtractionStatus.AMBIGUOUS:
+            base.quantity_status = ExtractionStatus.AMBIGUOUS
+        _extend_text(base.missing_or_unknown, [SOURCE_CONFLICT_REASON])
+        warnings.append(
+            f"{SOURCE_CONFLICT_REASON}: {canonical} has conflicting explicit quantities "
+            f"{', '.join(sorted(map(str, explicit_quantity_values)))}."
+        )
 
     if conflicts:
         base.status = ExtractionStatus.AMBIGUOUS

@@ -1801,6 +1801,15 @@ def _map_evidence(
         warnings,
         f"evidence-{index}",
     )
+    has_sheet_name = item.sheet_name is not None and item.sheet_name.strip() != ""
+    has_cell_range = item.cell_range is not None and item.cell_range.strip() != ""
+    has_locator = (
+        item.page_number is not None
+        or has_sheet_name
+        or has_cell_range
+        or item.region is not None
+    )
+    extracted_text = item.text if source_id != "unknown" and has_locator else None
     return Evidence(
         id=item.id or f"evidence-{index}",
         source_id=source_id,
@@ -1809,11 +1818,11 @@ def _map_evidence(
         sheet_name=item.sheet_name,
         cell_range=item.cell_range,
         region=item.region,
-        extracted_text=item.text,
+        extracted_text=extracted_text,
         visual_description=item.visual_description or item.location,
         status=_status_for_value(item.text or item.visual_description, item.status),
         confidence=item.confidence,
-        notes=item.notes,
+        notes=_append_note(item.notes, item.text) if extracted_text is None else item.notes,
     )
 
 
@@ -1852,7 +1861,8 @@ def _build_element_evidence(
                     f"element-{element_index}",
                 ),
                 type="text",
-                extracted_text=element.evidence,
+                extracted_text=None,
+                notes=element.evidence,
                 status=_status_for_value(element.evidence, element.status),
                 confidence=element.confidence,
             )

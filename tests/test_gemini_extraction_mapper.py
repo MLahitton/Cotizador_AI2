@@ -266,8 +266,10 @@ def test_mapper_promotes_element_evidence_to_root_evidence_and_ids() -> None:
     assert len(result.evidence) == 1
     assert result.evidence[0].id == "evidence-1"
     assert result.evidence[0].source_id == "source-1"
-    assert result.evidence[0].extracted_text is not None
-    assert "TODOS LOS VIDRIOS" in result.evidence[0].extracted_text
+    assert result.evidence[0].extracted_text is None
+    assert result.evidence[0].notes is not None
+    assert "Planos detalle 1 en pagina 1" in result.evidence[0].notes
+    assert "TODOS LOS VIDRIOS" in result.evidence[0].notes
     assert result.evidence[0].page_number is None
     assert result.evidence[0].region is None
     assert element.evidence_ids == ["evidence-1"]
@@ -280,7 +282,11 @@ def test_mapper_preserves_structured_element_evidence_source_ids() -> None:
             GeminiElement(
                 id="v-01",
                 evidence_items=[
-                    GeminiEvidence(source_id="source-2", text="VIDRIO TEMPLADO 8mm"),
+                    GeminiEvidence(
+                        source_id="source-2",
+                        text="VIDRIO TEMPLADO 8mm",
+                        page_number=2,
+                    ),
                 ],
             )
         ]
@@ -297,14 +303,100 @@ def test_mapper_preserves_structured_element_evidence_source_ids() -> None:
     assert result.elements[0].evidence_ids == ["evidence-1"]
 
 
+def test_mapper_element_evidence_requires_localizable_locator_for_extracted_text() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="v-01",
+                evidence_items=[
+                    GeminiEvidence(source_id="source-2", text="Esta entrada corresponde a la segunda ocurrencia (1 unidad)."),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(
+        extraction,
+        default_source_id=None,
+        allowed_source_ids=["source-1", "source-2", "source-3"],
+    )
+
+    assert result.evidence[0].source_id == "source-2"
+    assert result.evidence[0].extracted_text is None
+    assert result.evidence[0].notes == "Esta entrada corresponde a la segunda ocurrencia (1 unidad)."
+    assert result.elements[0].evidence_ids == ["evidence-1"]
+
+
+def test_mapper_element_evidence_whitespace_sheet_or_cell_range_not_locator() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="v-01",
+                evidence_items=[
+                    GeminiEvidence(
+                        source_id="source-2",
+                        text="Texto sin locator real",
+                        sheet_name="   ",
+                        cell_range=" \n\t",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(
+        extraction,
+        default_source_id=None,
+        allowed_source_ids=["source-1", "source-2", "source-3"],
+    )
+
+    assert result.evidence[0].extracted_text is None
+    assert result.evidence[0].notes == "Texto sin locator real"
+
+
+def test_mapper_element_evidence_preserves_region_as_locator() -> None:
+    extraction = GeminiExtraction(
+        elements=[
+            GeminiElement(
+                id="v-01",
+                evidence_items=[
+                    GeminiEvidence(
+                        source_id="source-2",
+                        text="VIDRIO TEMPLADO 8mm",
+                        region={"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4},
+                    )
+                ],
+            )
+        ]
+    )
+
+    result = map_gemini_extraction_to_requirement_extraction(
+        extraction,
+        default_source_id=None,
+        allowed_source_ids=["source-1", "source-2", "source-3"],
+    )
+
+    assert result.evidence[0].extracted_text == "VIDRIO TEMPLADO 8mm"
+    assert result.evidence[0].region is not None
+    assert result.evidence[0].region.x == 0.1
+
+
 def test_mapper_preserves_two_element_evidences_from_two_sources() -> None:
     extraction = GeminiExtraction(
         elements=[
             GeminiElement(
                 id="v-03",
                 evidence_items=[
-                    GeminiEvidence(source_id="source-1", text="Detalle V03"),
-                    GeminiEvidence(source_id="source-2", text="Cuadro V03"),
+                    GeminiEvidence(
+                        source_id="source-1",
+                        text="Detalle V03",
+                        page_number=1,
+                    ),
+                    GeminiEvidence(
+                        source_id="source-2",
+                        text="Cuadro V03",
+                        page_number=2,
+                    ),
                 ],
             )
         ]
@@ -367,7 +459,8 @@ def test_mapper_unknown_source_id_warns_without_arbitrary_reassignment() -> None
     )
 
     assert result.evidence[0].source_id == "unknown"
-    assert result.evidence[0].extracted_text == "Dato con fuente desconocida"
+    assert result.evidence[0].extracted_text is None
+    assert result.evidence[0].notes == "Dato con fuente desconocida"
     assert any(warning.code == "unknown_evidence_source" for warning in result.warnings)
 
 
@@ -440,6 +533,9 @@ def test_mapper_preserves_pdf_xlsx_and_image_evidence_fields() -> None:
     assert result.evidence[2].region.y == 0.20
     assert result.evidence[2].region.width == 0.30
     assert result.evidence[2].region.height == 0.40
+    assert result.evidence[0].extracted_text == "PDF note"
+    assert result.evidence[1].extracted_text == "XLSX row"
+    assert result.evidence[2].extracted_text == "Foto detalle"
 
 
 def test_mapper_preserves_root_evidence_source_information() -> None:
