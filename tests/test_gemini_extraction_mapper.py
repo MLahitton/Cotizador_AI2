@@ -309,7 +309,10 @@ def test_mapper_element_evidence_requires_localizable_locator_for_extracted_text
             GeminiElement(
                 id="v-01",
                 evidence_items=[
-                    GeminiEvidence(source_id="source-2", text="Esta entrada corresponde a la segunda ocurrencia (1 unidad)."),
+                    GeminiEvidence(
+                        source_id="source-2",
+                        text="Esta entrada corresponde a la segunda ocurrencia (1 unidad).",
+                    ),
                 ],
             )
         ]
@@ -323,7 +326,10 @@ def test_mapper_element_evidence_requires_localizable_locator_for_extracted_text
 
     assert result.evidence[0].source_id == "source-2"
     assert result.evidence[0].extracted_text is None
-    assert result.evidence[0].notes == "Esta entrada corresponde a la segunda ocurrencia (1 unidad)."
+    assert (
+        result.evidence[0].notes
+        == "Esta entrada corresponde a la segunda ocurrencia (1 unidad)."
+    )
     assert result.elements[0].evidence_ids == ["evidence-1"]
 
 

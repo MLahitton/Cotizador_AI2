@@ -6,12 +6,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import platform
 import sys
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
@@ -21,6 +20,11 @@ REPO_ROOT = BASE.parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from app.providers.gemini_localization_v1 import (  # noqa: E402
+    GeminiLocalizationAPIError,
+    build_localization_api_schema,
+    localization_api_schema_metadata,
+)
 from app.services.document_localization_v1 import (  # noqa: E402
     LocalizationError,
     build_plan,
@@ -32,7 +36,6 @@ from app.services.document_localization_v1 import (  # noqa: E402
     write_json,
 )
 from app.services.localization_prompt_v1 import SYSTEM_INSTRUCTION  # noqa: E402
-
 
 NEW_FILES = (
     "app/models/document_localization_v1.py",
@@ -72,7 +75,7 @@ def make_plan(prepared: Path, out: Path | None = None, tiles: str = "auto") -> t
     # Encoding model tiles is deferred to run/replay to avoid repeating costly work.
     # execute_plan validates all selected request sizes before creating the client.
     output = new_output(out, "plan", prepared.parent)
-    plan["created_utc"] = datetime.now(timezone.utc).isoformat()
+    plan["created_utc"] = datetime.now(UTC).isoformat()
     plan["code_provenance"] = provenance()
     write_json(output / "localization_plan.json", plan)
     report = {key: value for key, value in plan.items() if key != "jobs"}
@@ -120,18 +123,22 @@ def execute_plan(plan_path: Path, *, allow_paid_calls: bool, max_calls: int,
     plan = load_verified_plan(plan_path)
     jobs = select_jobs(plan, project, document)
     if len(jobs) > max_calls:
-        raise LocalizationError(f"REQUEST_BUDGET_EXCEEDED: selected={len(jobs)}, max={max_calls}")
+        raise LocalizationError(
+            f"REQUEST_BUDGET_EXCEEDED: selected={len(jobs)}, max={max_calls}"
+        )
     for job in jobs:
         request_for_job(plan, job)
     output = new_output(out, "run", Path(plan["preparation_report_path"]).parent)
     report: dict[str, Any] = {
         "schema_version": 1, "status": "LOCALIZATION_RUNNING",
-        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "created_utc": datetime.now(UTC).isoformat(),
         "plan_sha256": file_sha256(plan_path),
         "preparation_report_sha256": plan["preparation_report_sha256"],
         "source_archive_sha256": plan["source_archive_sha256"],
         "prompt_sha256": plan["prompt_sha256"],
         "schema_sha256": plan["response_schema_sha256"],
+        "api_schema": localization_api_schema_metadata(),
+        "api_schema_file": "api_response_schema.json",
         "requested_jobs": len(jobs), "request_budget": max_calls,
         "sdk_retry_attempts": 1,
         "network_calls_attempted": 0, "responses_received": 0,
@@ -143,6 +150,7 @@ def execute_plan(plan_path: Path, *, allow_paid_calls: bool, max_calls: int,
         "code_provenance": provenance(), "jobs": [],
     }
     # Create once to prove output is writable before paying for any requests.
+    write_json(output / "api_response_schema.json", build_localization_api_schema())
     write_json(output / "run_started.json", report)
     client = None
     failure = False
@@ -188,21 +196,45 @@ def execute_plan(plan_path: Path, *, allow_paid_calls: bool, max_calls: int,
                 row["artifact_directory"] = job["job_id"] + "/proposals"
                 report["pages_with_valid_proposal_shape"] += 1
                 report["unverified_element_proposals"] += len(result["elements"])
-                report["model_reported_partial_views"] += int(result["coverage_claim"] != "FULL_SCAN_CLAIMED")
-                report["orientation_review_views"] += int(result["suggested_rotation_clockwise"] != 0)
+                report["model_reported_partial_views"] += int(
+                    result["coverage_claim"] != "FULL_SCAN_CLAIMED"
+                )
+                report["orientation_review_views"] += int(
+                    result["suggested_rotation_clockwise"] != 0
+                )
                 report["unreadable_region_proposals"] += sum(
                     r["legibility"] != "READABLE" for r in result["regions"])
             except Exception as exc:
                 # Provider exceptions can embed headers/keys/payloads: do NOT log str(exc).
                 row["status"] = "FAILED"
                 row["error_type"] = type(exc).__name__
-                row["reason"] = str(exc) if isinstance(exc, LocalizationError) else "REQUEST_OR_ARTIFACT_FAILED"
+                row["reason"] = (
+                    str(exc)
+                    if isinstance(exc, LocalizationError)
+                    else "REQUEST_OR_ARTIFACT_FAILED"
+                )
+                if isinstance(exc, GeminiLocalizationAPIError):
+                    row["error_type"] = exc.original_error_type
+                    row["reason"] = "GEMINI_API_ERROR"
+                    row["api_error"] = exc.diagnostic()
                 failure = True
             finally:
                 row["elapsed_seconds"] = round(time.perf_counter() - started, 3)
                 report["jobs"].append(row)
                 write_json(job_dir / "job_report.json", row)
-                print(f"{row['corpus_document_id']} view={job['view_index']}: {row['status']}", flush=True)
+                print(
+                    f"{row['corpus_document_id']} view={job['view_index']}: "
+                    f"{row['status']}",
+                    flush=True,
+                )
+                if "api_error" in row:
+                    info = row["api_error"]
+                    print(
+                        f"API_HTTP_CODE={info['http_code']} | "
+                        f"API_STATUS={info['status']}",
+                        flush=True,
+                    )
+                    print(f"API_MESSAGE_REDACTED={info['message_redacted']}", flush=True)
     except Exception as exc:
         report["setup_error_type"] = type(exc).__name__
         done = {r["job_id"] for r in report["jobs"]}
@@ -215,7 +247,9 @@ def execute_plan(plan_path: Path, *, allow_paid_calls: bool, max_calls: int,
                 client.close()
             except Exception:
                 report["client_close_warning"] = True
-        report["status"] = "LOCALIZATION_HAS_ERRORS" if failure else "LOCALIZATION_RECORDED_UNVERIFIED"
+        report["status"] = (
+            "LOCALIZATION_HAS_ERRORS" if failure else "LOCALIZATION_RECORDED_UNVERIFIED"
+        )
         write_json(output / "localization_report.json", report)
     return report, output
 
@@ -241,18 +275,27 @@ def replay_response(plan_path: Path, job_id: str, response_path: Path,
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subs = parser.add_subparsers(dest="command", required=True)
-    plan_parser = subs.add_parser("plan", help="Sin red ni claves: comprueba entradas y lista solicitudes")
+    plan_parser = subs.add_parser(
+        "plan",
+        help="Sin red ni claves: comprueba entradas y lista solicitudes",
+    )
     plan_parser.add_argument("--prepared", type=Path, required=True)
     plan_parser.add_argument("--tiles", choices=["auto", "none"], default="auto")
     plan_parser.add_argument("--out", type=Path)
-    live = subs.add_parser("run", help="OPT-IN: envia las vistas seleccionadas a Gemini (puede tener costo)")
+    live = subs.add_parser(
+        "run",
+        help="OPT-IN: envia las vistas seleccionadas a Gemini (puede tener costo)",
+    )
     live.add_argument("--plan", type=Path, required=True)
     live.add_argument("--project")
     live.add_argument("--document")
     live.add_argument("--max-calls", type=int, required=True)
     live.add_argument("--allow-paid-calls", action="store_true")
     live.add_argument("--out", type=Path)
-    replay = subs.add_parser("replay", help="Valida otra vez una respuesta guardada, sin llamada al modelo")
+    replay = subs.add_parser(
+        "replay",
+        help="Valida otra vez una respuesta guardada, sin llamada al modelo",
+    )
     replay.add_argument("--plan", type=Path, required=True)
     replay.add_argument("--job", required=True)
     replay.add_argument("--response", type=Path, required=True)
@@ -272,10 +315,19 @@ def main(argv=None) -> int:
             report, output = execute_plan(
                 args.plan, allow_paid_calls=args.allow_paid_calls, max_calls=args.max_calls,
                 project=args.project, document=args.document, out=args.out)
-            for field in ("status", "requested_jobs", "network_calls_attempted", "responses_received",
-                          "pages_with_valid_proposal_shape", "unverified_element_proposals"):
+            for field in (
+                "status",
+                "requested_jobs",
+                "network_calls_attempted",
+                "responses_received",
+                "pages_with_valid_proposal_shape",
+                "unverified_element_proposals",
+            ):
                 print(f"{field.upper()}={report[field]}")
-            print("VISUAL_ASSOCIATION_VALIDATED=NO | CANONICAL_EXTRACTION_RUN=NO | CORPUS_APPROVED=NO")
+            print(
+                "VISUAL_ASSOCIATION_VALIDATED=NO | CANONICAL_EXTRACTION_RUN=NO | "
+                "CORPUS_APPROVED=NO"
+            )
             print(f"REPORT={output / 'localization_report.json'}")
             return 1 if report["status"] == "LOCALIZATION_HAS_ERRORS" else 0
         report, output = replay_response(args.plan, args.job, args.response, args.out)

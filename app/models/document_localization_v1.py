@@ -106,7 +106,9 @@ class PageLocalizationProposal(BaseModel):
                 if not element.reference_raw.strip() or not element.reference_region_ids:
                     raise ValueError("A nonempty reference requires its visible label/table region")
         if not self.elements and self.coverage == "FULL_SCAN_CLAIMED":
-            raise ValueError("Use NO_ELEMENTS_SEEN/UNREADABLE/PARTIAL, not a full success for no elements")
+            raise ValueError(
+                "Use NO_ELEMENTS_SEEN/UNREADABLE/PARTIAL, not a full success for no elements"
+            )
         if self.coverage == "NO_ELEMENTS_SEEN" and self.elements:
             raise ValueError("NO_ELEMENTS_SEEN cannot contain element proposals")
         if (self.coverage != "FULL_SCAN_CLAIMED" or

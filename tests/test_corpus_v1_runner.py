@@ -104,7 +104,10 @@ def test_quantity_does_not_use_panel_count():
     assert result["checks"][0]["state"] == "MISSING"
 
 
-@pytest.mark.parametrize("stage,field", [("enrichment", "operation_raw"), ("pre-mapper", "operation")])
+@pytest.mark.parametrize(
+    ("stage", "field"),
+    [("enrichment", "operation_raw"), ("pre-mapper", "operation")],
+)
 def test_operation_schema_adapter(stage, field):
     result = runner.evaluate_snapshot(
         snapshot(**{field: "BATIENTE"}),
@@ -126,7 +129,11 @@ def test_inventory_detects_extra_missing_and_duplicate_references():
 
 
 def test_unannotated_project_is_never_green():
-    result = runner.evaluate_snapshot(snapshot(), {"projects": [{"project_id": "p", "elements": []}]}, "p")
+    result = runner.evaluate_snapshot(
+        snapshot(),
+        {"projects": [{"project_id": "p", "elements": []}]},
+        "p",
+    )
     assert result["status"] == "NOT_ANNOTATED"
     assert result["checked_values"] == 0
     assert result["corpus_approved"] is False

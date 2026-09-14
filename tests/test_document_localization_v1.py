@@ -5,7 +5,6 @@ import copy
 import hashlib
 import json
 import socket
-from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -61,7 +60,9 @@ def prepared_fixture(root, *, pdf=True, count=1, size=(200, 100), text_state=Non
         obsname = "page-0001.json" if pdf else "image.json"
         with Image.new("RGB", size, "white") as image:
             image.save(directory / png)
-        text_state_resolved = text_state or ("NATIVE_TEXT_PRESENT_UNVERIFIED" if pdf else "IMAGE_NO_NATIVE_TEXT")
+        text_state_resolved = text_state or (
+            "NATIVE_TEXT_PRESENT_UNVERIFIED" if pdf else "IMAGE_NO_NATIVE_TEXT"
+        )
         chars = [character()] if pdf and text_state_resolved != "NO_NATIVE_TEXT" else []
         dump(directory / obsname, {
             "schema_version": 1, "document_id": document_id,
@@ -148,7 +149,10 @@ def test_jobs_do_not_depend_on_report_order(tmp_path):
     assert build_plan(report)["jobs"] == jobs
 
 
-@pytest.mark.parametrize("relative", ["../escape", "/etc/passwd", "C:/file", "C:\\file", ".env:secret", "", "a//b", "a/./b"])
+@pytest.mark.parametrize(
+    "relative",
+    ["../escape", "/etc/passwd", "C:/file", "C:\\file", ".env:secret", "", "a//b", "a/./b"],
+)
 def test_unsafe_paths_rejected(tmp_path, relative):
     with pytest.raises(LocalizationError):
         safe_child(tmp_path, relative)
@@ -503,9 +507,14 @@ def test_cannot_use_filesystem_names_for_region_ids():
 
 
 def test_real_sdk_request_configuration_without_network(monkeypatch):
-    pytest.importorskip("google.genai", reason="Optional live SDK not installed in offline test host")
     from types import SimpleNamespace
+
     from app.providers.gemini_localization_v1 import GeminiLocalizationClient
+
+    pytest.importorskip(
+        "google.genai",
+        reason="Optional live SDK not installed in offline test host",
+    )
 
     client = GeminiLocalizationClient(api_key="test-key-not-a-real-credential", model="mock-model")
     received = {}

@@ -257,12 +257,17 @@ def build_plan(report_path: Path, *, tiles: str = "auto") -> dict[str, Any]:
             height_expected = _positive_int(page.get("height_px"), "HEIGHT")
             obs = read_json(observation_path)
             frame = obs.get("frame", {})
-            if ((width, height) != (width_expected, height_expected)
-                    or obs.get("document_id") != document_id or obs.get("page_number") != pn
-                    or frame.get("preview_width_px") != width or frame.get("preview_height_px") != height
-                    or frame.get("origin_preview") != "TOP_LEFT"
-                    or obs.get("preview_file") != page.get("preview_file")
-                    or obs.get("schema_version") != 1 or obs.get("status") != "PREPARED"):
+            if (
+                (width, height) != (width_expected, height_expected)
+                or obs.get("document_id") != document_id
+                or obs.get("page_number") != pn
+                or frame.get("preview_width_px") != width
+                or frame.get("preview_height_px") != height
+                or frame.get("origin_preview") != "TOP_LEFT"
+                or obs.get("preview_file") != page.get("preview_file")
+                or obs.get("schema_version") != 1
+                or obs.get("status") != "PREPARED"
+            ):
                 raise LocalizationError("PREVIEW_OBSERVATION_IDENTITY_OR_FRAME_MISMATCH")
             tokens = native_tokens(obs)
             windows = tile_windows(width, height, tiles)
@@ -332,7 +337,10 @@ def select_jobs(plan: dict, project: str | None = None,
 
 def request_for_job(plan: dict, job: dict) -> tuple[str, list[tuple[str, str, bytes]], dict]:
     """Recheck immutable assets immediately before a request or offline replay."""
-    if plan["prompt_sha256"] != prompt_digest() or plan["response_schema_sha256"] != response_schema_digest():
+    if (
+        plan["prompt_sha256"] != prompt_digest()
+        or plan["response_schema_sha256"] != response_schema_digest()
+    ):
         raise LocalizationError("CODE_CHANGED_REBUILD_LOCALIZATION_PLAN")
     report_path = Path(plan["preparation_report_path"])
     if file_sha256(report_path) != plan["preparation_report_sha256"]:
@@ -364,7 +372,13 @@ def request_for_job(plan: dict, job: dict) -> tuple[str, list[tuple[str, str, by
 
     with Image.open(io.BytesIO(data)) as original:
         mime, full_data = encode(original) if photo else ("image/png", data)
-    images = [("Pagina/imagen completa. Marco de coordenadas para TODAS las cajas.", mime, full_data)]
+    images = [
+        (
+            "Pagina/imagen completa. Marco de coordenadas para TODAS las cajas.",
+            mime,
+            full_data,
+        )
+    ]
 
     tile_context = []
     with Image.open(io.BytesIO(data)) as image:
@@ -376,8 +390,14 @@ def request_for_job(plan: dict, job: dict) -> tuple[str, list[tuple[str, str, by
                         y1 * 1000 / height, x1 * 1000 / width]
             with image.crop(window) as crop:
                 mime, encoded = encode(crop)
-                images.append((f"Ampliacion {index} de la MISMA pagina. Su box_2d global: {page_box}",
-                               mime, encoded))
+                images.append(
+                    (
+                        f"Ampliacion {index} de la MISMA pagina. "
+                        f"Su box_2d global: {page_box}",
+                        mime,
+                        encoded,
+                    )
+                )
             tile_context.append({"tile_index": index, "full_page_box_2d": page_box})
     context = {
         "job_id": job["job_id"], "physical_page_number": job["page_number"],
@@ -491,7 +511,9 @@ def save_proposal_artifacts(plan: dict, job: dict, text: str, output_dir: Path,
         "orientation_applied": False,
         "elements": [element.model_dump(mode="json") for element in proposal.elements],
         "regions": region_rows,
-        "unassigned_region_ids": [r.region_id for r in proposal.regions if r.region_id not in linked],
+        "unassigned_region_ids": [
+            r.region_id for r in proposal.regions if r.region_id not in linked
+        ],
         "issues": proposal.issues,
         "structural_validation": "PASSED", "visual_association_validated": False,
         "canonical_extraction_run": False, "corpus_approved": False,

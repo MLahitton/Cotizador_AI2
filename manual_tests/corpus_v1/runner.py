@@ -270,7 +270,10 @@ def main(argv: list[str] | None = None) -> int:
             project_id = "proyecto_1" if args.command == "baseline" else args.project
             stage = "enrichment" if args.command == "baseline" else args.stage
             report = evaluate_snapshot(
-                read_json(snapshot_path), read_json(BASE / "expected_checks.json"), project_id, stage,
+                read_json(snapshot_path),
+                read_json(BASE / "expected_checks.json"),
+                project_id,
+                stage,
             )
             report["snapshot_sha256"] = sha256_file(snapshot_path)
             report["snapshot_file"] = snapshot_path.name
@@ -289,7 +292,10 @@ def main(argv: list[str] | None = None) -> int:
             if args.out.resolve() in {path.resolve() for path in protected_paths}:
                 raise InputError("El reporte no puede sobrescribir entradas ni configuración")
             args.out.parent.mkdir(parents=True, exist_ok=True)
-            args.out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            args.out.write_text(
+                json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
         print(f"STATUS={report['status']}")
         for key in (
             "documents_expected", "documents_matched", "projects_registered",

@@ -163,7 +163,9 @@ def _read_native_characters(page, width_px: int, height_px: int, options, raw):
                     box = textpage.get_charbox(index)
                     item["bbox_pdf_canvas"] = list(box)
                     angle = float(raw.FPDFText_GetCharAngle(textpage, index))
-                    item["angle_radians_pdf_canvas"] = angle if math.isfinite(angle) and angle >= 0 else None
+                    item["angle_radians_pdf_canvas"] = (
+                        angle if math.isfinite(angle) and angle >= 0 else None
+                    )
                     item.update(_box_in_preview(page, box, width_px, height_px, raw))
                     if item["visible_region"] is None:
                         unlocated += 1

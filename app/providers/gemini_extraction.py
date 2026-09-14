@@ -1,11 +1,11 @@
 import json
-import os
 import logging
+import os
 import re
 import struct
 import time
-import zipfile
 import uuid
+import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -32,9 +32,9 @@ from app.services.extraction_prompt import (
 )
 from app.services.gemini_enrichment_pipeline import (
     build_discovery_batches,
-    reconcile_and_build_gemini_extraction,
     enrichment_to_gemini_extraction,
     merge_enrichment_batches,
+    reconcile_and_build_gemini_extraction,
     sum_token_usage,
 )
 from app.services.gemini_extraction_mapper import map_gemini_extraction_to_requirement_extraction

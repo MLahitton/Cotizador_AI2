@@ -86,17 +86,17 @@ def test_character_boxes_align_with_preview_for_pdf_rotation_and_crop(tmp_path, 
     data = artifacts(tmp_path / "out", result)
     assert data["frame"]["pdf_intrinsic_rotation_clockwise"] == rotate
     char = next(c for c in data["characters"] if c["text"] == "V")
-    l, b, r, t = crop or (20, 30, 320, 430)
+    left, bottom, right, top = crop or (20, 30, 320, 430)
     x0, y0, x1, y1 = char["bbox_pdf_canvas"]
     x, y = (x0 + x1) / 2, (y0 + y1) / 2
     if rotate == 0:
-        expected = ((x-l)/(r-l), (t-y)/(t-b))
+        expected = ((x - left) / (right - left), (top - y) / (top - bottom))
     elif rotate == 90:
-        expected = ((y-b)/(t-b), (x-l)/(r-l))
+        expected = ((y - bottom) / (top - bottom), (x - left) / (right - left))
     elif rotate == 180:
-        expected = ((r-x)/(r-l), (y-b)/(t-b))
+        expected = ((right - x) / (right - left), (y - bottom) / (top - bottom))
     else:
-        expected = ((t-y)/(t-b), (r-x)/(r-l))
+        expected = ((top - y) / (top - bottom), (right - x) / (right - left))
     reg = char["visible_region"]
     assert reg["x"] + reg["width"]/2 == pytest.approx(expected[0], abs=0.003)
     assert reg["y"] + reg["height"]/2 == pytest.approx(expected[1], abs=0.003)

@@ -1090,7 +1090,11 @@ def _derive_functional_type_from_components(
     if not roles:
         return None
 
-    mobile_roles = [role for role in roles if role in {"SLIDING", "PROJECTING", "SWING", "CASEMENT", "FOLDING"}]
+    mobile_roles = [
+        role
+        for role in roles
+        if role in {"SLIDING", "PROJECTING", "SWING", "CASEMENT", "FOLDING"}
+    ]
     if len(mobile_roles) == 1:
         mobile = mobile_roles[0]
         if mobile == "PROJECTING":

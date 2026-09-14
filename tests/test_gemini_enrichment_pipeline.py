@@ -1262,7 +1262,7 @@ def test_inventory_reconciliation_marks_quantity_conflict_without_silent_overwri
     assert SOURCE_CONFLICT_REASON in (extraction.notes or "")
 
 
-def test_inventory_reconciliation_preserves_explicit_quantity_despite_other_field_conflicts() -> None:
+def test_inventory_reconciliation_preserves_explicit_quantity_despite_other_conflicts() -> None:
     extraction = enrichment_to_gemini_extraction(
         GeminiDiscoveryResult(),
         GeminiEnrichmentResult(
@@ -1295,7 +1295,7 @@ def test_inventory_reconciliation_preserves_explicit_quantity_despite_other_fiel
     assert SOURCE_CONFLICT_REASON in element.missing_or_unknown
 
 
-def test_inventory_reconciliation_preserves_explicit_quantity_with_panel_and_component_counts() -> None:
+def test_inventory_reconciliation_preserves_explicit_quantity_with_panel_counts() -> None:
     extraction = enrichment_to_gemini_extraction(
         GeminiDiscoveryResult(),
         GeminiEnrichmentResult(

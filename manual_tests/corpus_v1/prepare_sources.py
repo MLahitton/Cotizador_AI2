@@ -18,7 +18,7 @@ import uuid
 import zipfile
 from collections import Counter
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -107,11 +107,16 @@ def prepare_corpus(
         raise InputError(f"Proyecto no registrado: {project}")
     selected = [d for d in manifest["documents"] if project is None or d["project_id"] == project]
     if output.exists() or output.is_symlink():
-        raise InputError("La carpeta de salida ya existe. Usa una carpeta nueva; no se sobrescribe.")
+        raise InputError(
+            "La carpeta de salida ya existe. Usa una carpeta nueva; no se sobrescribe."
+        )
     output.mkdir(parents=True, exist_ok=False)
     _write_report(output / "inputs_verification.json", integrity)
     rows = []
-    with zipfile.ZipFile(archive_path) as archive, tempfile.TemporaryDirectory(prefix="ai2-src-") as tmp:
+    with (
+        zipfile.ZipFile(archive_path) as archive,
+        tempfile.TemporaryDirectory(prefix="ai2-src-") as tmp,
+    ):
         members = {
             unicodedata.normalize("NFC", m.filename.replace("\\", "/")): (i, m)
             for i, m in enumerate((m for m in archive.infolist() if not m.is_dir()), start=1)
@@ -157,7 +162,7 @@ def prepare_corpus(
         "schema_version": 1,
         "status": "PREPARATION_COMPLETED" if all_prepared else "PREPARATION_HAS_ERRORS",
         "run_id": output.name,
-        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "created_utc": datetime.now(UTC).isoformat(),
         "python_version": platform.python_version(),
         "platform": platform.system(),
         "source_archive_sha256": archive_hash_before,
