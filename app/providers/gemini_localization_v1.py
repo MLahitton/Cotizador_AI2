@@ -12,14 +12,20 @@ import re
 from typing import Any
 from urllib.parse import quote, quote_plus
 
-from app.models.document_localization_v1 import PageLocalizationProposal
-from app.services.localization_prompt_v1 import SYSTEM_INSTRUCTION
+from app.models.document_localization_v1 import (
+    ImageFrameLocalizationProposal,
+    PageLocalizationProposal,
+)
+from app.services.localization_prompt_v1 import (
+    IMAGE_FRAME_LOCALIZATION_RULES,
+    SYSTEM_INSTRUCTION,
+)
 
 # Generation and validation have different jobs. Keep the strict Pydantic model
 # unchanged; send a smaller structural schema to the API. This is a controlled
 # compatibility candidate, NOT proof of the cause of any generic HTTP 400.
 _API_SCHEMA_VERSION = "page-localization-api-v1.1"
-_SCHEMA_LOCAL_ONLY = frozenset({"pattern", "minLength", "maxLength", "title"})
+_SCHEMA_LOCAL_ONLY = frozenset({"pattern", "minLength", "maxLength", "title", "default"})
 _SCHEMA_SUPPORTED = frozenset(
     {
         "$defs", "$ref", "type", "properties", "items", "required", "enum",
@@ -43,6 +49,16 @@ def _compact_api_schema(
     """
     if not isinstance(node, dict):
         raise ValueError("LOCALIZATION_API_SCHEMA_EXPECTED_OBJECT")
+    node = copy.deepcopy(node)
+    if "const" in node:
+        const = node.pop("const")
+        if not isinstance(const, str) or node.get("type") != "string":
+            raise ValueError("LOCALIZATION_API_SCHEMA_UNSUPPORTED_CONST")
+        if "enum" in node:
+            values = node["enum"]
+            if not isinstance(values, list) or const not in values:
+                raise ValueError("LOCALIZATION_API_SCHEMA_CONST_ENUM_MISMATCH")
+        node["enum"] = [const]
     unknown = set(node) - _SCHEMA_SUPPORTED - _SCHEMA_LOCAL_ONLY
     if unknown:
         raise ValueError("LOCALIZATION_API_SCHEMA_UNREVIEWED_KEYWORD")
@@ -101,7 +117,41 @@ def build_localization_api_schema() -> dict[str, Any]:
     return _compact_api_schema(schema, schema.get("$defs", {}))
 
 
+def build_image_frame_localization_api_schema() -> dict[str, Any]:
+    """Generation schema for the opt-in image-frame contract."""
+    schema = ImageFrameLocalizationProposal.model_json_schema()
+    return _compact_api_schema(schema, schema.get("$defs", {}))
+
+
 def localization_api_schema_metadata() -> dict[str, Any]:
+    """Safe request provenance: no credentials, images or document content."""
+    return _localization_api_schema_metadata(
+        version=_API_SCHEMA_VERSION,
+        api_schema=build_localization_api_schema(),
+        local_schema=PageLocalizationProposal.model_json_schema(),
+        local_validator="PageLocalizationProposal (unchanged)",
+    )
+
+
+def image_frame_localization_api_schema_metadata() -> dict[str, Any]:
+    """Safe request provenance for the opt-in image-frame contract."""
+    metadata = _localization_api_schema_metadata(
+        version="page-localization-image-frames-api-v1.0",
+        api_schema=build_image_frame_localization_api_schema(),
+        local_schema=ImageFrameLocalizationProposal.model_json_schema(),
+        local_validator="ImageFrameLocalizationProposal",
+    )
+    metadata["local_validation_policy"] = "conditional-localization-notes-v1"
+    return metadata
+
+
+def _localization_api_schema_metadata(
+    *,
+    version: str,
+    api_schema: dict[str, Any],
+    local_schema: dict[str, Any],
+    local_validator: str,
+) -> dict[str, Any]:
     """Safe request provenance: no credentials, images or document content."""
     def digest(schema: dict[str, Any]) -> str:
         encoded = json.dumps(
@@ -114,13 +164,11 @@ def localization_api_schema_metadata() -> dict[str, Any]:
         return hashlib.sha256(encoded).hexdigest()
 
     return {
-        "version": _API_SCHEMA_VERSION,
-        "api_schema_sha256": digest(build_localization_api_schema()),
-        "local_validation_schema_sha256": digest(
-            PageLocalizationProposal.model_json_schema()
-        ),
+        "version": version,
+        "api_schema_sha256": digest(api_schema),
+        "local_validation_schema_sha256": digest(local_schema),
         "hash_encoding": "UTF-8 JSON; sorted keys; compact separators; ensure_ascii=False",
-        "local_validator": "PageLocalizationProposal (unchanged)",
+        "local_validator": local_validator,
         "local_only_rules": [
             "string_patterns", "string_lengths", "collection_limits",
             "coordinate_ranges_and_order", "unique_ids", "typed_region_links",
@@ -225,6 +273,36 @@ class GeminiLocalizationClient:
         )
 
     def generate(self, prompt: str, images: list[tuple[str, str, bytes]]) -> dict[str, Any]:
+        return self._generate_with_schema(
+            prompt,
+            images,
+            system_instruction=SYSTEM_INSTRUCTION,
+            response_json_schema=build_localization_api_schema(),
+            api_schema=localization_api_schema_metadata(),
+        )
+
+    def generate_image_frames(
+        self,
+        prompt: str,
+        images: list[tuple[str, str, bytes]],
+    ) -> dict[str, Any]:
+        return self._generate_with_schema(
+            prompt,
+            images,
+            system_instruction=IMAGE_FRAME_LOCALIZATION_RULES,
+            response_json_schema=build_image_frame_localization_api_schema(),
+            api_schema=image_frame_localization_api_schema_metadata(),
+        )
+
+    def _generate_with_schema(
+        self,
+        prompt: str,
+        images: list[tuple[str, str, bytes]],
+        *,
+        system_instruction: str,
+        response_json_schema: dict[str, Any],
+        api_schema: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         types = self._types
         parts = []
         for label, mime_type, data in images:
@@ -236,12 +314,12 @@ class GeminiLocalizationClient:
                 model=self.model,
                 contents=parts,
                 config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION,
+                    system_instruction=system_instruction,
                     automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
                     temperature=0,
                     max_output_tokens=16384,
                     response_mime_type="application/json",
-                    response_json_schema=build_localization_api_schema(),
+                    response_json_schema=response_json_schema,
                 ),
             )
         except self._api_error_type as exc:
@@ -256,7 +334,7 @@ class GeminiLocalizationClient:
             "text": getattr(response, "text", None),
             "finish_reason": str(finish) if finish is not None else None,
             "requested_model": self.model,
-            "api_schema": localization_api_schema_metadata(),
+            "api_schema": api_schema,
             "response_model_version": getattr(response, "model_version", None),
             "usage": ({
                 field: getattr(usage, field, None)

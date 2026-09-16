@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     gemini_api_key: str
     gemini_model: str = "gemini-3.6-flash"
     gemini_enrichment_batch_size: int = 8
+    ai2_extraction_pipeline: str = "legacy"
     app_env: str = "development"
 
     model_config = SettingsConfigDict(

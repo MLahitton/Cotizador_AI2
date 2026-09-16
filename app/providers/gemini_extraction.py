@@ -50,6 +50,7 @@ from app.services.inventory_trace import (
     enrichment_inventory_elements,
     final_inventory_elements,
 )
+from app.services.localized_extraction_pipeline import extract_requirement_with_localized_v1
 from app.services.numeric_trace import NumericResolutionTrace, build_numeric_resolution_trace
 from app.services.quantity_grounding import (
     QuantityGroundingDecision,
@@ -204,6 +205,44 @@ class GeminiExtractionProvider:
         if not files:
             raise ValueError("Debes proporcionar al menos un archivo para extraer.")
 
+        pipeline = (
+            getattr(self._settings, "ai2_extraction_pipeline", "legacy")
+            .strip()
+            .casefold()
+        )
+        if pipeline == "localized_v1":
+            extraction_stage_dir = (
+                _initial_extraction_stage_dir()
+                if os.getenv("AI2_DEBUG_EXTRACTION_STAGES") == "1"
+                else None
+            )
+            return extract_requirement_with_localized_v1(
+                files,
+                project_id=project_id,
+                requirement_id=requirement_id,
+                api_key=self._settings.gemini_api_key,
+                model=self._provider.model,
+                debug_dir=extraction_stage_dir,
+            )
+        if pipeline not in {"", "legacy"}:
+            raise ValueError(f"AI2_EXTRACTION_PIPELINE no soportado: {pipeline}")
+
+        return self._extract_with_discovery_legacy_from_files(
+            files,
+            project_id=project_id,
+            requirement_id=requirement_id,
+            batch_size=batch_size,
+            debug_capture=debug_capture,
+        )
+
+    def _extract_with_discovery_legacy_from_files(
+        self,
+        files: list[Path],
+        project_id: str | None = None,
+        requirement_id: str | None = None,
+        batch_size: int | None = None,
+        debug_capture: GeminiFullPipelineDebugCapture | None = None,
+    ) -> RequirementExtraction:
         total_started = time.perf_counter()
         file_load_started = time.perf_counter()
         with _RequirementFileContext(self, files) as context:

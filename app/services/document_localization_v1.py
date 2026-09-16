@@ -13,10 +13,27 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from app.models.document_localization_v1 import PageLocalizationProposal
+from pydantic import ValidationError
+
+from app.models.document_localization_v1 import (
+    ImageFrameLocalizationProposal,
+    PageLocalizationProposal,
+)
+from app.services.localization_frame_guard import (
+    LocalizationFrameError,
+    edge_contact_warnings,
+    full_page_box_to_normalized_region,
+    full_page_box_to_pixel_bounds,
+    image_visible_content_gate,
+    local_box_to_full_page_box,
+    registry_digest,
+    validate_image_registry,
+)
 from app.services.localization_prompt_v1 import (
     PROMPT_VERSION,
+    build_image_frame_localization_prompt,
     build_localization_prompt,
+    image_frame_prompt_digest,
     prompt_digest,
 )
 
@@ -26,10 +43,37 @@ MAX_PREVIEW_PIXELS = 32_000_000
 MAX_VIEWS = 500
 MAX_NATIVE_TOKENS = 500
 MAX_NATIVE_CHARS = 8000
+IMAGE_FRAME_CONTRACT_VERSION = "page-localization-image-frames-v1.0"
+IMAGE_FRAME_LOCAL_VALIDATION_POLICY = "conditional-localization-notes-v1"
 
 
 class LocalizationError(ValueError):
     """Invalid source/plan/response; never a successful interpretation."""
+
+
+class LocalizationResponseValidationError(LocalizationError):
+    """Sanitized local validation failure details; never includes model payload."""
+
+    def __init__(
+        self,
+        *,
+        contract: str,
+        validator: str,
+        errors: list[dict[str, Any]],
+    ) -> None:
+        self.contract = contract
+        self.validator = validator
+        self.errors = errors
+        super().__init__("INVALID_LOCALIZATION_RESPONSE")
+
+    def diagnostic(self) -> dict[str, Any]:
+        return {
+            "stage": "LOCAL_RESPONSE_VALIDATION",
+            "contract": self.contract,
+            "validator": self.validator,
+            "errors": self.errors,
+            "raw_response_saved": True,
+        }
 
 
 def file_sha256(path: Path) -> str:
@@ -324,6 +368,21 @@ def response_schema_digest() -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def image_frame_response_schema_digest() -> str:
+    raw = json.dumps(ImageFrameLocalizationProposal.model_json_schema(), sort_keys=True)
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def previous_image_frame_notes_schema_digest() -> str:
+    schema = json.loads(json.dumps(ImageFrameLocalizationProposal.model_json_schema()))
+    notes = schema["$defs"]["ImageFrameLocalizedElementProposal"]["properties"][
+        "localization_notes"
+    ]
+    notes["minLength"] = 1
+    raw = json.dumps(schema, sort_keys=True)
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
 def select_jobs(plan: dict, project: str | None = None,
                 document: str | None = None) -> list[dict]:
     jobs = plan["jobs"]
@@ -416,6 +475,121 @@ def request_for_job(plan: dict, job: dict) -> tuple[str, list[tuple[str, str, by
     return prompt, images, obs
 
 
+def _request_images_and_context(job: dict, data: bytes, obs: dict) -> tuple[
+    list[tuple[str, str, bytes]],
+    list[dict[str, Any]],
+    dict[str, Any],
+]:
+    width, height = job["width_px"], job["height_px"]
+    from PIL import Image
+
+    photo = job["media_type"].startswith("image/")
+
+    def encode(image):
+        stream = io.BytesIO()
+        if photo:
+            with image.convert("RGB") as rgb:
+                rgb.save(stream, format="JPEG", quality=95, subsampling=0)
+            return "image/jpeg", stream.getvalue()
+        image.save(stream, format="PNG", compress_level=1)
+        return "image/png", stream.getvalue()
+
+    with Image.open(io.BytesIO(data)) as original:
+        mime, full_data = encode(original) if photo else ("image/png", data)
+    images = [("img0 pagina preparada completa", mime, full_data)]
+    registry = [{
+        "image_id": "img0",
+        "window_px": [0, 0, width, height],
+        "image_width_px": width,
+        "image_height_px": height,
+        "mime_type": mime,
+        "sha256": hashlib.sha256(full_data).hexdigest(),
+    }]
+
+    with Image.open(io.BytesIO(data)) as image:
+        for index, window in enumerate(job["tile_windows_px"], start=1):
+            x0, y0, x1, y1 = window
+            if not (0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height):
+                raise LocalizationError("INVALID_TILE_WINDOW")
+            with image.crop(window) as crop:
+                mime, encoded = encode(crop)
+            image_id = f"img{index}"
+            images.append((f"{image_id} recorte enviado de la misma pagina", mime, encoded))
+            registry.append({
+                "image_id": image_id,
+                "window_px": window,
+                "image_width_px": x1 - x0,
+                "image_height_px": y1 - y0,
+                "mime_type": mime,
+                "sha256": hashlib.sha256(encoded).hexdigest(),
+            })
+
+    try:
+        validate_image_registry(registry, (width, height))
+    except LocalizationFrameError as exc:
+        raise LocalizationError(str(exc)) from exc
+    context = {
+        "job_id": job["job_id"],
+        "contract_version": IMAGE_FRAME_CONTRACT_VERSION,
+        "physical_page_number": job["page_number"],
+        "view_index": job["view_index"],
+        "source_media_type": job["media_type"],
+        "frame": {"origin": "TOP_LEFT", "width_px": width, "height_px": height,
+                  "box_2d_order": "y0,x0,y1,x1", "box_scale": 1000},
+        "image_registry": registry,
+        "image_registry_sha256": registry_digest(registry),
+        "model_image_derivative": "JPEG_QUALITY_95_FOR_PHOTO" if photo else "PREPARED_PNG",
+        "native": native_tokens(obs),
+        "preparation_warnings": job["preparation_warnings"],
+    }
+    return images, registry, context
+
+
+def image_frame_request_for_job(
+    plan: dict,
+    job: dict,
+    *,
+    allow_previous_notes_policy: bool = False,
+) -> tuple[str, list[tuple[str, str, bytes]], dict]:
+    """Build the opt-in image-frame request; legacy requests remain unchanged."""
+    schema_hash = plan.get("response_schema_sha256")
+    schema_matches = schema_hash == image_frame_response_schema_digest()
+    previous_notes_policy = schema_hash == previous_image_frame_notes_schema_digest()
+    if (
+        plan.get("prompt_sha256") != image_frame_prompt_digest()
+        or not (schema_matches or (allow_previous_notes_policy and previous_notes_policy))
+        or plan.get("coordinate_contract") != IMAGE_FRAME_CONTRACT_VERSION
+    ):
+        raise LocalizationError("IMAGE_FRAME_PLAN_REQUIRED")
+    report_path = Path(plan["preparation_report_path"])
+    if file_sha256(report_path) != plan["preparation_report_sha256"]:
+        raise LocalizationError("PREPARATION_REPORT_CHANGED")
+    preview = safe_child(report_path.parent, job["preview_relative_path"])
+    obs_path = safe_child(report_path.parent, job["observations_relative_path"])
+    if (file_sha256(preview) != job["preview_sha256"]
+            or file_sha256(obs_path) != job["observations_sha256"]):
+        raise LocalizationError("PREPARED_ASSET_CHANGED")
+    data, size = _image_bytes_and_size(preview)
+    if list(size) != [job["width_px"], job["height_px"]]:
+        raise LocalizationError("PREVIEW_SIZE_CHANGED")
+    obs = read_json(obs_path)
+    images, registry, context = _request_images_and_context(job, data, obs)
+    prompt = build_image_frame_localization_prompt(context)
+    if sum(len(b) for _, _, b in images) * 4 / 3 + len(prompt.encode()) > 18 * 1024 * 1024:
+        raise LocalizationError("INLINE_REQUEST_BUDGET_EXCEEDED")
+    return prompt, images, {
+        "observations": obs,
+        "image_registry": registry,
+        "schema_provenance": {
+            "plan_response_schema_sha256": schema_hash,
+            "applied_response_schema_sha256": image_frame_response_schema_digest(),
+            "local_validation_policy": IMAGE_FRAME_LOCAL_VALIDATION_POLICY,
+            "previous_notes_policy_accepted": allow_previous_notes_policy
+            and previous_notes_policy,
+        },
+    }
+
+
 def parse_proposal(text: str, job_id: str) -> PageLocalizationProposal:
     if not isinstance(text, str) or len(text.encode()) > 2 * 1024 * 1024:
         raise LocalizationError("MODEL_RESPONSE_EMPTY_OR_TOO_LARGE")
@@ -430,10 +604,51 @@ def parse_proposal(text: str, job_id: str) -> PageLocalizationProposal:
             return value
         data = json.loads(text, object_pairs_hook=pairs)
         proposal = PageLocalizationProposal.model_validate(data)
+    except ValidationError as exc:
+        raise LocalizationResponseValidationError(
+            contract="page-localization-v1.0",
+            validator="PageLocalizationProposal",
+            errors=exc.errors(include_input=False, include_context=False, include_url=False),
+        ) from exc
     except (ValueError, TypeError) as exc:
         raise LocalizationError("INVALID_LOCALIZATION_RESPONSE") from exc
     if proposal.job_id != job_id:
         raise LocalizationError("MODEL_JOB_ID_MISMATCH")
+    return proposal
+
+
+def parse_image_frame_proposal(
+    text: str,
+    job_id: str,
+    registry: list[dict[str, Any]],
+) -> ImageFrameLocalizationProposal:
+    if not isinstance(text, str) or len(text.encode()) > 2 * 1024 * 1024:
+        raise LocalizationError("MODEL_RESPONSE_EMPTY_OR_TOO_LARGE")
+    try:
+        def pairs(items):
+            value = {}
+            for key, item in items:
+                if key in value:
+                    raise ValueError("Duplicate key")
+                value[key] = item
+            return value
+        data = json.loads(text, object_pairs_hook=pairs)
+        proposal = ImageFrameLocalizationProposal.model_validate(data)
+    except ValidationError as exc:
+        raise LocalizationResponseValidationError(
+            contract=IMAGE_FRAME_CONTRACT_VERSION,
+            validator="ImageFrameLocalizationProposal",
+            errors=exc.errors(include_input=False, include_context=False, include_url=False),
+        ) from exc
+    except (ValueError, TypeError) as exc:
+        raise LocalizationError("INVALID_LOCALIZATION_RESPONSE") from exc
+    if proposal.job_id != job_id:
+        raise LocalizationError("MODEL_JOB_ID_MISMATCH")
+    if proposal.image_registry_sha256 != registry_digest(registry):
+        raise LocalizationError("IMAGE_REGISTRY_DIGEST_MISMATCH")
+    known = {frame["image_id"] for frame in registry}
+    if any(region.source_image_id not in known for region in proposal.regions):
+        raise LocalizationError("UNKNOWN_SOURCE_IMAGE_ID")
     return proposal
 
 
@@ -451,6 +666,82 @@ def _native_region_slice(obs: dict, box: list[float]) -> dict:
         target.append(char["pdf_char_index"])
     return {"contained_char_indices": inside, "boundary_char_indices": touching,
             "association": "GEOMETRIC_OVERLAP_ONLY_NOT_SEMANTIC_PROOF"}
+
+
+def _gate_for_regions(
+    regions: list[dict[str, Any]],
+    elements: list[dict[str, Any]],
+    *,
+    image_frames: bool,
+) -> dict[str, Any]:
+    blocked = [
+        row["region_id"] for row in regions
+        if row.get("evidence_status") == "BLOCKED_NO_VISIBLE_CONTENT"
+    ]
+    blocked_set = set(blocked)
+    warnings = {
+        row["region_id"]: row["evidence_warnings"] for row in regions
+        if row.get("evidence_warnings")
+    }
+    missing_dimension_links = []
+    candidate_warnings = []
+    blocked_links = []
+    for element in elements:
+        linked_ids = []
+        for field in (
+            "reference_region_ids",
+            "drawing_region_ids",
+            "table_region_ids",
+            "dimension_region_ids",
+            "note_region_ids",
+        ):
+            linked_ids.extend(element.get(field, []))
+        dimension_ids = element.get("dimension_region_ids", [])
+        if not dimension_ids:
+            missing_dimension_links.append({
+                "candidate_id": element.get("candidate_id"),
+                "reference_raw": element.get("reference_raw"),
+                "dimension_area_status": element.get("dimension_area_status"),
+            })
+            if image_frames:
+                status_value = element.get("dimension_area_status")
+                if status_value in {"UNREADABLE", "UNRESOLVED"}:
+                    candidate_warnings.append({
+                        "candidate_id": element.get("candidate_id"),
+                        "reference_raw": element.get("reference_raw"),
+                        "warnings": [f"DIMENSION_AREA_{status_value}"],
+                    })
+            else:
+                candidate_warnings.append({
+                    "candidate_id": element.get("candidate_id"),
+                    "reference_raw": element.get("reference_raw"),
+                    "warnings": ["DIMENSION_LINKS_NOT_LOCALIZED"],
+                })
+        linked_blocked = [region_id for region_id in linked_ids if region_id in blocked_set]
+        if linked_blocked:
+            blocked_links.append({
+                "candidate_id": element.get("candidate_id"),
+                "reference_raw": element.get("reference_raw"),
+                "blocked_region_ids": linked_blocked,
+            })
+    status = (
+        "REVIEW_REQUIRED"
+        if blocked or warnings or missing_dimension_links or candidate_warnings
+        else "UNVERIFIED"
+    )
+    return {
+        "schema_version": 1,
+        "status": status,
+        "blocked_region_ids": blocked,
+        "region_warnings": warnings,
+        "candidates_without_dimension_links_count": len(missing_dimension_links),
+        "candidates_without_dimension_links": missing_dimension_links,
+        "candidate_warnings": candidate_warnings,
+        "candidates_with_blocked_region_links": blocked_links,
+        "visual_association_validated": False,
+        "ready_for_semantic_extraction": False,
+        "corpus_approved": False,
+    }
 
 
 def save_proposal_artifacts(plan: dict, job: dict, text: str, output_dir: Path,
@@ -485,6 +776,9 @@ def save_proposal_artifacts(plan: dict, job: dict, text: str, output_dir: Path,
                 bounds = [math.floor(x0 * width / 1000), math.floor(y0 * height / 1000),
                           math.ceil(x1 * width / 1000), math.ceil(y1 * height / 1000)]
                 with image.crop(bounds) as crop:
+                    stream = io.BytesIO()
+                    crop.save(stream, format="PNG")
+                    gate = image_visible_content_gate(stream.getvalue())
                     crop.save(output_dir / f"{region.region_id}.png")
                 draw.rectangle(bounds, outline="red", width=max(1, width // 1200))
                 draw.text((bounds[0] + 2, bounds[1] + 2), region.region_id, fill="red")
@@ -494,12 +788,17 @@ def save_proposal_artifacts(plan: dict, job: dict, text: str, output_dir: Path,
                                                   "width": (x1 - x0) / 1000,
                                                   "height": (y1 - y0) / 1000},
                             "text_origin": "MODEL_TRANSCRIPTION_UNVERIFIED",
-                            "native_slice": _native_region_slice(obs, region.box_2d)})
+                            "native_slice": _native_region_slice(obs, region.box_2d),
+                            "evidence_status": gate["status"],
+                            "evidence_warnings": [],
+                            "visual_association_validated": False})
                 region_rows.append(row)
             annotated.save(output_dir / "regions_overview.png")
         finally:
             annotated.close()
     linked = {rid for element in proposal.elements for rid in element.linked_region_ids()}
+    element_rows = [element.model_dump(mode="json") for element in proposal.elements]
+    gate = _gate_for_regions(region_rows, element_rows, image_frames=False)
     result = {
         "schema_version": 1, "status": "PROPOSALS_RECORDED_UNVERIFIED", "origin": origin,
         "job_id": job["job_id"], "document_id": job["document_id"],
@@ -509,18 +808,160 @@ def save_proposal_artifacts(plan: dict, job: dict, text: str, output_dir: Path,
         "page_roles": proposal.page_roles, "coverage_claim": proposal.coverage,
         "suggested_rotation_clockwise": proposal.suggested_rotation_clockwise,
         "orientation_applied": False,
-        "elements": [element.model_dump(mode="json") for element in proposal.elements],
+        "elements": element_rows,
         "regions": region_rows,
         "unassigned_region_ids": [
             r.region_id for r in proposal.regions if r.region_id not in linked
         ],
         "issues": proposal.issues,
         "structural_validation": "PASSED", "visual_association_validated": False,
+        "ready_for_semantic_extraction": False,
         "canonical_extraction_run": False, "corpus_approved": False,
+        "evidence_gate": gate,
         "limitations": ["Boxes and links are model proposals, not verified ownership.",
                         "Crops use prepared preview pixels and no resolution enhancement.",
                         "Repeated references are preserved; no cross-page identity merge.",
                         "No quantity, measurement, specification or scope is resolved here."],
     }
     write_json(output_dir / "localization.json", result)
+    write_json(output_dir / "evidence_gate.json", gate)
+    return result
+
+
+def save_image_frame_proposal_artifacts(
+    plan: dict,
+    job: dict,
+    text: str,
+    output_dir: Path,
+    *,
+    origin: str = "MODEL_RESPONSE",
+    allow_previous_notes_policy: bool = False,
+) -> dict:
+    _prompt, _images, debug = image_frame_request_for_job(
+        plan,
+        job,
+        allow_previous_notes_policy=allow_previous_notes_policy,
+    )
+    obs = debug["observations"]
+    registry = debug["image_registry"]
+    proposal = parse_image_frame_proposal(text, job["job_id"], registry)
+    frame_map = {frame["image_id"]: frame for frame in registry}
+    width, height = job["width_px"], job["height_px"]
+    output_dir = Path(output_dir)
+    if output_dir.exists() or output_dir.is_symlink():
+        raise LocalizationError("OUTPUT_ALREADY_EXISTS")
+    output_dir.mkdir(parents=True, exist_ok=False)
+    from PIL import Image, ImageDraw
+
+    preview_path = safe_child(
+        Path(plan["preparation_report_path"]).parent,
+        job["preview_relative_path"],
+    )
+    region_rows = []
+    with Image.open(preview_path) as image:
+        annotated = image.convert("RGB")
+        draw = ImageDraw.Draw(annotated)
+        try:
+            for region in proposal.regions:
+                frame = frame_map[region.source_image_id]
+                try:
+                    full_box = local_box_to_full_page_box(region.box_2d, frame)
+                    bounds = full_page_box_to_pixel_bounds(full_box, (width, height))
+                except LocalizationFrameError as exc:
+                    raise LocalizationError(str(exc)) from exc
+                with image.crop(bounds) as crop:
+                    stream = io.BytesIO()
+                    crop.save(stream, format="PNG")
+                    gate = image_visible_content_gate(stream.getvalue())
+                    crop.save(output_dir / f"{region.region_id}.png")
+                frame_size = (frame["image_width_px"], frame["image_height_px"])
+                try:
+                    local_bounds = full_page_box_to_pixel_bounds(
+                        region.box_2d,
+                        (1000, 1000),
+                    )
+                except LocalizationFrameError as exc:
+                    raise LocalizationError(str(exc)) from exc
+                warnings = edge_contact_warnings(local_bounds, (1000, 1000))
+                draw.rectangle(bounds, outline="red", width=max(1, width // 1200))
+                draw.text((bounds[0] + 2, bounds[1] + 2), region.region_id, fill="red")
+                row = region.model_dump(mode="json")
+                row.update({
+                    "crop_file": f"{region.region_id}.png",
+                    "crop_bbox_px": bounds,
+                    "box_2d_space": region.box_2d_space,
+                    "source_image_window_px": frame["window_px"],
+                    "source_image_size_px": list(frame_size),
+                    "full_page_box_2d": full_box,
+                    "full_page_box_2d_space": "FULL_PAGE_PIXELS_YX",
+                    "region_normalized": full_page_box_to_normalized_region(
+                        full_box,
+                        (width, height),
+                    ),
+                    "text_origin": "MODEL_TRANSCRIPTION_UNVERIFIED",
+                    "native_slice": _native_region_slice(
+                        obs,
+                        [v * 1000 / s for v, s in zip(
+                            full_box,
+                            (height, width, height, width),
+                            strict=True,
+                        )],
+                    ),
+                    "evidence_status": gate["status"],
+                    "evidence_warnings": warnings,
+                    "visual_association_validated": False,
+                })
+                region_rows.append(row)
+            annotated.save(output_dir / "regions_overview.png")
+        finally:
+            annotated.close()
+    linked = {rid for element in proposal.elements for rid in element.linked_region_ids()}
+    blocked = {
+        row["region_id"] for row in region_rows
+        if row["evidence_status"] == "BLOCKED_NO_VISIBLE_CONTENT"
+    }
+    element_rows = [element.model_dump(mode="json") | {
+        "evidence_blocked_region_ids": [
+            rid for rid in element.linked_region_ids() if rid in blocked
+        ],
+        "visual_association_validated": False,
+        "ready_for_semantic_extraction": False,
+    } for element in proposal.elements]
+    gate = _gate_for_regions(region_rows, element_rows, image_frames=True)
+    result = {
+        "schema_version": 1,
+        "status": "PROPOSALS_RECORDED_UNVERIFIED",
+        "origin": origin,
+        "coordinate_contract": IMAGE_FRAME_CONTRACT_VERSION,
+        "job_id": job["job_id"],
+        "document_id": job["document_id"],
+        "content_sha256": job["content_sha256"],
+        "project_id": job["project_id"],
+        "physical_page_number": job["page_number"],
+        "view_index": job["view_index"],
+        "image_registry_sha256": registry_digest(registry),
+        "image_registry": registry,
+        "schema_provenance": debug["schema_provenance"],
+        "preview_sha256": job["preview_sha256"],
+        "observations_sha256": job["observations_sha256"],
+        "page_roles": proposal.page_roles,
+        "coverage_claim": proposal.coverage,
+        "suggested_rotation_clockwise": proposal.suggested_rotation_clockwise,
+        "orientation_applied": False,
+        "elements": element_rows,
+        "regions": region_rows,
+        "unassigned_region_ids": [
+            row["region_id"] for row in region_rows if row["region_id"] not in linked
+        ],
+        "issues": proposal.issues,
+        "structural_validation": "PASSED",
+        "visual_association_validated": False,
+        "ready_for_semantic_extraction": False,
+        "canonical_extraction_run": False,
+        "corpus_approved": False,
+        "evidence_gate": gate,
+        "limitations": ["Boxes and links are model proposals, not verified ownership."],
+    }
+    write_json(output_dir / "localization.json", result)
+    write_json(output_dir / "evidence_gate.json", gate)
     return result

@@ -14,7 +14,9 @@ from app.models.document_localization_v1 import PageLocalizationProposal
 from app.providers.gemini_localization_v1 import (
     GeminiLocalizationClient,
     _compact_api_schema,
+    build_image_frame_localization_api_schema,
     build_localization_api_schema,
+    image_frame_localization_api_schema_metadata,
     localization_api_schema_metadata,
 )
 from app.services.document_localization_v1 import LocalizationError, parse_proposal
@@ -100,15 +102,44 @@ def test_no_mutation_or_shared_nested_state():
     assert original == PageLocalizationProposal.model_json_schema()
 
 
+def test_image_frame_api_schema_converts_contract_const_to_required_enum():
+    original = copy.deepcopy(build_image_frame_localization_api_schema())
+    schema = build_image_frame_localization_api_schema()
+    contract = schema["properties"]["contract_version"]
+    assert "contract_version" in schema["required"]
+    assert contract["type"] == "string"
+    assert contract["enum"] == ["page-localization-image-frames-v1.0"]
+    assert all("const" not in node and "default" not in node for node in walk(schema))
+    assert schema == original
+
+
 def test_keywords_as_property_names_are_not_dropped():
     original = {"type": "object", "properties": {
         "pattern": {"type": "string", "pattern": "^ok$"},
         "maxLength": {"type": "integer"},
-    }, "required": ["pattern", "maxLength"]}
+        "const": {"type": "string"},
+    }, "required": ["pattern", "maxLength", "const"]}
     result = _compact_api_schema(original, {})
     assert result["properties"] == {"pattern": {"type": "string"},
-                                    "maxLength": {"type": "integer"}}
-    assert result["required"] == ["pattern", "maxLength"]
+                                    "maxLength": {"type": "integer"},
+                                    "const": {"type": "string"}}
+    assert result["required"] == ["pattern", "maxLength", "const"]
+
+
+def test_string_const_becomes_single_value_enum_without_mutating_input():
+    original = {"type": "string", "const": "fixed"}
+    before = copy.deepcopy(original)
+    assert _compact_api_schema(original, {}) == {"type": "string", "enum": ["fixed"]}
+    assert original == before
+
+
+def test_nested_string_const_and_compatible_enum_are_limited_to_const():
+    original = {"type": "object", "properties": {
+        "mode": {"type": "string", "const": "A", "enum": ["A", "B"]},
+    }}
+    assert _compact_api_schema(original, {})["properties"]["mode"] == {
+        "type": "string", "enum": ["A"],
+    }
 
 
 @pytest.mark.parametrize("schema,defs", [
@@ -118,6 +149,8 @@ def test_keywords_as_property_names_are_not_dropped():
     ({"$ref": "#/$defs/Cycle"}, {"Cycle": {"$ref": "#/$defs/Cycle"}}),
     ({"$ref": "#/$defs/Name", "type": "object"}, {"Name": {"type": "string"}}),
     ({"type": "string", "new_constraint": True}, {}),
+    ({"type": "integer", "const": 1}, {}),
+    ({"type": "string", "const": "A", "enum": ["B"]}, {}),
 ])
 def test_unreviewed_schema_features_fail_before_network(schema, defs):
     with pytest.raises(ValueError, match="LOCALIZATION_API_SCHEMA"):
@@ -200,6 +233,22 @@ def test_schema_metadata_identifies_generation_separately_from_validation():
     assert meta["api_schema_sha256"] == hashlib.sha256(encoded).hexdigest()
     assert meta["api_schema_sha256"] != meta["local_validation_schema_sha256"]
     assert "PageLocalizationProposal" in meta["local_validator"]
+
+
+def test_image_frame_schema_metadata_identifies_image_frame_validator():
+    meta = image_frame_localization_api_schema_metadata()
+    encoded = json.dumps(
+        build_image_frame_localization_api_schema(),
+        ensure_ascii=False,
+        sort_keys=True,
+        allow_nan=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    assert meta["version"] == "page-localization-image-frames-api-v1.0"
+    assert meta["api_schema_sha256"] == hashlib.sha256(encoded).hexdigest()
+    assert meta["api_schema_sha256"] != localization_api_schema_metadata()["api_schema_sha256"]
+    assert meta["local_validator"] == "ImageFrameLocalizationProposal"
+    assert meta["local_validation_policy"] == "conditional-localization-notes-v1"
 
 
 def test_schema_is_recorded_before_a_failure_without_an_extra_call(tmp_path, monkeypatch):

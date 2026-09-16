@@ -22,20 +22,33 @@ if str(REPO_ROOT) not in sys.path:
 
 from app.providers.gemini_localization_v1 import (  # noqa: E402
     GeminiLocalizationAPIError,
+    build_image_frame_localization_api_schema,
     build_localization_api_schema,
+    image_frame_localization_api_schema_metadata,
     localization_api_schema_metadata,
 )
 from app.services.document_localization_v1 import (  # noqa: E402
+    IMAGE_FRAME_CONTRACT_VERSION,
+    IMAGE_FRAME_LOCAL_VALIDATION_POLICY,
     LocalizationError,
+    LocalizationResponseValidationError,
     build_plan,
     file_sha256,
+    image_frame_request_for_job,
+    image_frame_response_schema_digest,
+    previous_image_frame_notes_schema_digest,
     read_json,
     request_for_job,
+    save_image_frame_proposal_artifacts,
     save_proposal_artifacts,
     select_jobs,
     write_json,
 )
-from app.services.localization_prompt_v1 import SYSTEM_INSTRUCTION  # noqa: E402
+from app.services.localization_prompt_v1 import (  # noqa: E402
+    IMAGE_FRAME_LOCALIZATION_RULES,
+    SYSTEM_INSTRUCTION,
+    image_frame_prompt_digest,
+)
 
 NEW_FILES = (
     "app/models/document_localization_v1.py",
@@ -69,8 +82,20 @@ def new_output(out: Path | None, kind: str, preparation_root: Path) -> Path:
     return output
 
 
-def make_plan(prepared: Path, out: Path | None = None, tiles: str = "auto") -> tuple[dict, Path]:
+def make_plan(
+    prepared: Path,
+    out: Path | None = None,
+    tiles: str = "auto",
+    *,
+    image_frames: bool = False,
+) -> tuple[dict, Path]:
     plan = build_plan(prepared, tiles=tiles)
+    if image_frames:
+        plan["coordinate_contract"] = IMAGE_FRAME_CONTRACT_VERSION
+        plan["local_validation_policy"] = IMAGE_FRAME_LOCAL_VALIDATION_POLICY
+        plan["prompt_version"] = "page-localization-image-frames-v1.0"
+        plan["prompt_sha256"] = image_frame_prompt_digest()
+        plan["response_schema_sha256"] = image_frame_response_schema_digest()
     # build_plan validates every asset/frame and indexes bounded native tokens.
     # Encoding model tiles is deferred to run/replay to avoid repeating costly work.
     # execute_plan validates all selected request sizes before creating the client.
@@ -90,7 +115,11 @@ def make_plan(prepared: Path, out: Path | None = None, tiles: str = "auto") -> t
     return report, output
 
 
-def load_verified_plan(plan_path: Path) -> dict:
+def load_verified_plan(
+    plan_path: Path,
+    *,
+    allow_previous_image_frame_notes_policy: bool = False,
+) -> dict:
     plan = read_json(plan_path, 10 * 1024 * 1024)
     if not isinstance(plan, dict) or plan.get("status") != "LOCALIZATION_PLAN_READY":
         raise LocalizationError("INVALID_LOCALIZATION_PLAN")
@@ -98,6 +127,21 @@ def load_verified_plan(plan_path: Path) -> dict:
     if file_sha256(prepared) != plan["preparation_report_sha256"]:
         raise LocalizationError("PREPARATION_REPORT_CHANGED")
     current = build_plan(prepared, tiles=plan["tile_mode"])
+    if plan.get("coordinate_contract") == IMAGE_FRAME_CONTRACT_VERSION:
+        previous_notes_policy = (
+            allow_previous_image_frame_notes_policy
+            and plan.get("response_schema_sha256") == previous_image_frame_notes_schema_digest()
+        )
+        current["coordinate_contract"] = IMAGE_FRAME_CONTRACT_VERSION
+        if "local_validation_policy" in plan or not previous_notes_policy:
+            current["local_validation_policy"] = IMAGE_FRAME_LOCAL_VALIDATION_POLICY
+        current["prompt_version"] = "page-localization-image-frames-v1.0"
+        current["prompt_sha256"] = image_frame_prompt_digest()
+        current["response_schema_sha256"] = (
+            previous_image_frame_notes_schema_digest()
+            if previous_notes_policy
+            else image_frame_response_schema_digest()
+        )
     for key, value in current.items():
         if plan.get(key) != value:
             raise LocalizationError("PLAN_CHANGED_OR_STALE_REBUILD_IT")
@@ -126,8 +170,12 @@ def execute_plan(plan_path: Path, *, allow_paid_calls: bool, max_calls: int,
         raise LocalizationError(
             f"REQUEST_BUDGET_EXCEEDED: selected={len(jobs)}, max={max_calls}"
         )
+    image_frames = plan.get("coordinate_contract") == IMAGE_FRAME_CONTRACT_VERSION
     for job in jobs:
-        request_for_job(plan, job)
+        if image_frames:
+            image_frame_request_for_job(plan, job)
+        else:
+            request_for_job(plan, job)
     output = new_output(out, "run", Path(plan["preparation_report_path"]).parent)
     report: dict[str, Any] = {
         "schema_version": 1, "status": "LOCALIZATION_RUNNING",
@@ -137,7 +185,18 @@ def execute_plan(plan_path: Path, *, allow_paid_calls: bool, max_calls: int,
         "source_archive_sha256": plan["source_archive_sha256"],
         "prompt_sha256": plan["prompt_sha256"],
         "schema_sha256": plan["response_schema_sha256"],
-        "api_schema": localization_api_schema_metadata(),
+        "applied_schema_sha256": image_frame_response_schema_digest()
+        if plan.get("coordinate_contract") == IMAGE_FRAME_CONTRACT_VERSION
+        else plan["response_schema_sha256"],
+        "previous_image_frame_notes_schema_sha256": previous_image_frame_notes_schema_digest()
+        if plan.get("coordinate_contract") == IMAGE_FRAME_CONTRACT_VERSION
+        else None,
+        "local_validation_policy": plan.get("local_validation_policy"),
+        "api_schema": (
+            image_frame_localization_api_schema_metadata()
+            if plan.get("coordinate_contract") == IMAGE_FRAME_CONTRACT_VERSION
+            else localization_api_schema_metadata()
+        ),
         "api_schema_file": "api_response_schema.json",
         "requested_jobs": len(jobs), "request_budget": max_calls,
         "sdk_retry_attempts": 1,
@@ -150,7 +209,11 @@ def execute_plan(plan_path: Path, *, allow_paid_calls: bool, max_calls: int,
         "code_provenance": provenance(), "jobs": [],
     }
     # Create once to prove output is writable before paying for any requests.
-    write_json(output / "api_response_schema.json", build_localization_api_schema())
+    if image_frames:
+        report["coordinate_contract"] = IMAGE_FRAME_CONTRACT_VERSION
+        write_json(output / "api_response_schema.json", build_image_frame_localization_api_schema())
+    else:
+        write_json(output / "api_response_schema.json", build_localization_api_schema())
     write_json(output / "run_started.json", report)
     client = None
     failure = False
@@ -169,15 +232,23 @@ def execute_plan(plan_path: Path, *, allow_paid_calls: bool, max_calls: int,
             job_dir = output / job["job_id"]
             job_dir.mkdir(exist_ok=False)
             try:
-                prompt, images, _obs = request_for_job(plan, job)
+                if image_frames:
+                    prompt, images, _debug = image_frame_request_for_job(plan, job)
+                    system_instruction = IMAGE_FRAME_LOCALIZATION_RULES
+                else:
+                    prompt, images, _obs = request_for_job(plan, job)
+                    system_instruction = SYSTEM_INSTRUCTION
                 with (job_dir / "request_prompt.txt").open("x", encoding="utf-8") as stream:
-                    stream.write(SYSTEM_INSTRUCTION + "\n\n" + prompt)
+                    stream.write(system_instruction + "\n\n" + prompt)
                 row["prompt_sha256"] = file_sha256(job_dir / "request_prompt.txt")
                 row["image_sha256"] = [hashlib.sha256(b).hexdigest() for _, _, b in images]
                 row["image_mime_types"] = [mime for _, mime, _ in images]
                 report["network_calls_attempted"] += 1
                 report["localization_model_run"] = True
-                response = client.generate(prompt, images)
+                if image_frames and hasattr(client, "generate_image_frames"):
+                    response = client.generate_image_frames(prompt, images)
+                else:
+                    response = client.generate(prompt, images)
                 report["responses_received"] += 1
                 write_json(job_dir / "response_envelope.json", response)
                 row["response_sha256"] = file_sha256(job_dir / "response_envelope.json")
@@ -185,8 +256,12 @@ def execute_plan(plan_path: Path, *, allow_paid_calls: bool, max_calls: int,
                 row["response_model_version"] = response.get("response_model_version")
                 if response.get("finish_reason") != "STOP":
                     raise LocalizationError("RESPONSE_NOT_COMPLETE_STOP")
-                result = save_proposal_artifacts(
-                    plan, job, response.get("text"), job_dir / "proposals")
+                if image_frames:
+                    result = save_image_frame_proposal_artifacts(
+                        plan, job, response.get("text"), job_dir / "proposals")
+                else:
+                    result = save_proposal_artifacts(
+                        plan, job, response.get("text"), job_dir / "proposals")
                 row["status"] = result["status"]
                 row["coverage_claim"] = result["coverage_claim"]
                 row["suggested_rotation_clockwise"] = result["suggested_rotation_clockwise"]
@@ -217,6 +292,8 @@ def execute_plan(plan_path: Path, *, allow_paid_calls: bool, max_calls: int,
                     row["error_type"] = exc.original_error_type
                     row["reason"] = "GEMINI_API_ERROR"
                     row["api_error"] = exc.diagnostic()
+                elif isinstance(exc, LocalizationResponseValidationError):
+                    row["local_validation_error"] = exc.diagnostic()
                 failure = True
             finally:
                 row["elapsed_seconds"] = round(time.perf_counter() - started, 3)
@@ -256,7 +333,7 @@ def execute_plan(plan_path: Path, *, allow_paid_calls: bool, max_calls: int,
 
 def replay_response(plan_path: Path, job_id: str, response_path: Path,
                     out: Path | None = None) -> tuple[dict, Path]:
-    plan = load_verified_plan(plan_path)
+    plan = load_verified_plan(plan_path, allow_previous_image_frame_notes_policy=True)
     matches = [job for job in plan["jobs"] if job["job_id"] == job_id]
     if len(matches) != 1:
         raise LocalizationError("UNKNOWN_JOB_ID")
@@ -264,8 +341,17 @@ def replay_response(plan_path: Path, job_id: str, response_path: Path,
     if envelope.get("finish_reason") != "STOP":
         raise LocalizationError("RESPONSE_NOT_COMPLETE_STOP")
     output = new_output(out, "replay", Path(plan["preparation_report_path"]).parent)
-    result = save_proposal_artifacts(
-        plan, matches[0], envelope.get("text"), output / "proposals", origin="OFFLINE_REPLAY")
+    if plan.get("coordinate_contract") == IMAGE_FRAME_CONTRACT_VERSION:
+        result = save_image_frame_proposal_artifacts(
+            plan, matches[0], envelope.get("text"), output / "proposals",
+            origin="OFFLINE_REPLAY",
+            allow_previous_notes_policy=True,
+        )
+    else:
+        result = save_proposal_artifacts(
+            plan, matches[0], envelope.get("text"), output / "proposals",
+            origin="OFFLINE_REPLAY",
+        )
     result["network_calls"] = 0
     result["response_sha256"] = file_sha256(response_path)
     write_json(output / "replay_report.json", result)
@@ -281,6 +367,7 @@ def main(argv=None) -> int:
     )
     plan_parser.add_argument("--prepared", type=Path, required=True)
     plan_parser.add_argument("--tiles", choices=["auto", "none"], default="auto")
+    plan_parser.add_argument("--image-frames", action="store_true")
     plan_parser.add_argument("--out", type=Path)
     live = subs.add_parser(
         "run",
@@ -303,7 +390,12 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "plan":
-            report, output = make_plan(args.prepared, args.out, args.tiles)
+            report, output = make_plan(
+                args.prepared,
+                args.out,
+                args.tiles,
+                image_frames=args.image_frames,
+            )
             for field in ("status", "projects", "documents", "views", "planned_requests",
                           "planned_images", "views_without_native_text", "network_calls"):
                 print(f"{field.upper()}={report[field]}")
